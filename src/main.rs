@@ -1,11 +1,11 @@
 use std::any::Any;
 use std::cell::RefCell;
+use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::fmt;
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
 use std::str::FromStr;
 use crate::keyword::*;
-use crate::VarValue::Bool;
+use crate::Operator::{Add, Div, Mul, NoOperator, Sub};
 
 mod keyword;
 
@@ -53,6 +53,15 @@ impl VarValue {
             VarValue::Float(v) => "float".to_string()
         }
     }
+}
+
+#[derive(Eq, PartialEq, Copy, Clone)]
+enum Operator {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    NoOperator
 }
 
 fn main() {
@@ -351,6 +360,104 @@ fn create_too_many_args_error(expected: usize, given: usize) -> String {
     }
 }
 
+fn extract_formula_to_int(formula: &str) -> (i32, Option<String>) {
+    let chars = formula.chars();
+
+    let mut sub_formulas = Vec::new();
+    let mut current = String::new();
+    let mut open_bracket = false;
+    let mut bracket_was_closed_last = false;
+    let mut sub_formulas_operators = Vec::new();
+    for char in chars {
+        if bracket_was_closed_last {
+            sub_formulas_operators.push(match char_to_operator(char) {
+                Some(o) => o,
+                None => return (0, Some(format!("Operator or end expected after closing bracket in formula \"{formula}\"")))
+            });
+
+            continue
+        }
+
+        if char == '(' {
+            if open_bracket {
+                return (0, Some(format!("Invalid double opening bracket in formula \"{formula}\"")))
+            }
+            open_bracket = true;
+        } else if char == ')' {
+            if !open_bracket {
+                return (0, Some(format!("Closing bracket without opening bracket in formula \"{formula}\"")))
+            }
+
+            sub_formulas.push(std::mem::take(&mut current));;
+            bracket_was_closed_last = true;
+            open_bracket = false;
+        } else {
+            current.push(char)
+        }
+    }
+
+    let mut results = Vec::new();
+    for sub_formula in sub_formulas {
+        if sub_formula.len() < 3 {
+            return (0, Some(format!("Sub-formula \"{sub_formula}\" does not match pattern [operand][operator][operand]")))
+        }
+
+        let mut operand1 = String::new();
+        let mut operand2 = String::new();
+        let mut operator = NoOperator;
+        let mut is_first_part = true;
+        for char in sub_formula.chars()  {
+            if char.is_ascii_digit() {
+                if is_first_part {
+                    operand1.push(char)
+                } else {
+                    operand2.push(char)
+                }
+                continue
+            }
+
+            match char_to_operator(char) {
+                Some(o) => {
+                    if operator != NoOperator {
+                        return (0, Some(format!("Sub-formula \"{sub_formula}\" contain a repetitive operator")))
+                    }
+                    operator = o;
+                },
+                None => return (0, Some(format!("Sub-formula \"{sub_formula}\" contains a character that is not allowed: \"{char}\"")))
+            }
+
+        }
+        results.push(apply_operation_int(i32::from_str(operand1.as_str()).unwrap(), i32::from_str(operand2.as_str()).unwrap(), operator));
+    }
+
+    let mut current_number = results.remove(0);
+    for (i,result) in results.iter().enumerate()  {
+        current_number = apply_operation_int(current_number,*result, *sub_formulas_operators.get(i).unwrap())
+    }
+
+    (current_number, None)
+}
+
 fn prepare_context(context: &str) -> Vec<&str> {
     context.split(" ").collect()
+}
+
+fn char_to_operator(c: char) -> Option<Operator> {
+    Some(match c {
+        '+' => Add,
+        '-' => Sub,
+        '*' => Mul,
+        '/' => Div,
+        _ => return None
+    })
+}
+
+fn apply_operation_int(operand1: i32, operand2: i32, operator: Operator) -> i32 {
+    match operator  {
+        Add => operand1+operand2,
+        Sub => operand1-operand2,
+        Mul => operand1*operand2,
+        Div => operand1/operand2,
+        _ => 0,
+    }
 }
