@@ -18,7 +18,7 @@ mod keyword;
          - Improve instruction splitter
          - Add comments
  */
-pub const PROGRAM: &str = "var int a 1;var int b 2;var int ~($a+$b) ~($a/$b);shout $3;shout \n;terminate ~($3-2)+(2*1)";
+pub const PROGRAM: &str = "var int a 1;var int b 2;var int ~($a+$b) ~($a/$b);shout $3;shout \n;shout ~(2)+(4)*(2);shout \n;terminate ~($3-2)+(2*1)";
 pub static mut INSTRUCTION_POINTER: isize = 0;
 pub static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -203,29 +203,19 @@ fn instr_jump(context: Vec<String>) -> Option<String> {
 }
 
 fn instr_shout(context_raw: &str) -> Option<String> {
+
     if context_raw.len() == 0 {
         return Some("Shout string or variable required".to_string())
     }
 
-    let mut context_as_chars = context_raw.chars();
-    let first_char = context_as_chars.next().unwrap();
-    if first_char  == IND_RESOLVE_VARIABLE {
-        let rest: String = context_as_chars.collect();
-        let resolve_result = resolve_variable(rest.as_str());
-        return match resolve_result.1  {
-            Some(v) => Some(v),
-            None => {
-                print!("{}", resolve_result.0.to_string());
-                None
-            }
+    let mut formatted = context_raw.to_string();
+    match prepare_argument(&mut formatted) {
+        Some(s) => return Some(s),
+        None => {
+            print!("{}", formatted);
+            None
         }
-    } else if first_char == IND_STRING_IGNORE {
-        print!("{}", context_raw.replacen(IND_STRING_IGNORE, "", 1));
-    } else {
-        print!("{}", context_raw);
     }
-
-    None
 }
 
 fn instr_var(context: Vec<String>) -> Option<String> {
@@ -378,7 +368,7 @@ fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
     }
 
     let sub_formulas = result.0;
-    let sub_formulas_operators = result.1;
+    let mut sub_formulas_operators = result.1;
 
     let mut results = Vec::new();
     for sub_formula in sub_formulas {
@@ -474,6 +464,19 @@ fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
         }
     }
 
+    'outer: while results.len() > 1 {
+         for i in 0..sub_formulas_operators.len() {
+            let operator = sub_formulas_operators[i];
+            if operator == Mul || operator == Div {
+                results[i] = apply_operation_float(results[i],results.remove(i+1), operator);
+                sub_formulas_operators.remove(i);
+                break 'outer;
+            }
+        }
+
+        break;
+    }
+
     let mut current_number = results.remove(0);
     for (i,result) in results.iter().enumerate()  {
         current_number = apply_operation_float(current_number,*result, *sub_formulas_operators.get(i).unwrap())
@@ -538,46 +541,58 @@ fn prepare_context(context: &str) -> (Vec<String>, Option<String>) {
             continue;
         }
 
-        let mut chars = split_context[i].chars();
-
-        let ch = chars.next().unwrap();
-
-        if ch == IND_STRING_IGNORE {
-            split_context[i] = chars.as_str().to_string();
-            continue;
-        } else if ch == IND_RESOLVE_VARIABLE {
-            let r = resolve_variable(chars.as_str());
-            match r.1 {
-                Some(s) => return (Vec::new(), Some(s)),
-                None => {
-                    split_context[i] = r.0.to_string()
-                }
-            }
-            continue;
-        } else if ch == IND_FORMULA_FLOAT {
-            let r = extract_formula_to_float(chars.as_str());
-            match r.1 {
-                Some(s) => return (Vec::new(), Some(s)),
-                None => {
-                    split_context[i] = r.0.to_string()
-                }
-            }
-            continue;
-        } else if ch == IND_FORMULA_ROUNDED {
-            let r = extract_formula_to_float(chars.as_str());
-            match r.1 {
-                Some(s) => return (Vec::new(), Some(s)),
-                None => {
-                    split_context[i] = (r.0.round() as i32).to_string();
-                }
-            }
-            continue;
+        match prepare_argument(&mut split_context[i]) {
+            Some(s) => return (Vec::new(), Some(s)),
+            None => {}
         }
 
         i+=1;
     }
 
    (split_context, None)
+}
+
+fn prepare_argument(argument: &mut String) -> Option<String> {
+    if argument.is_empty() {
+        return Some("Empty argument was provided".to_string())
+    }
+    let mut chars = argument.chars();
+
+    let ch = chars.next().unwrap();
+
+    if ch == IND_STRING_IGNORE {
+        *argument = chars.as_str().to_string();
+        return None;
+    } else if ch == IND_RESOLVE_VARIABLE {
+        let r = resolve_variable(chars.as_str());
+        return match r.1 {
+            Some(s) => Some(s),
+            None => {
+                *argument = r.0.to_string();
+                None
+            }
+        }
+    } else if ch == IND_FORMULA_FLOAT {
+        let r = extract_formula_to_float(chars.as_str());
+        return match r.1 {
+            Some(s) => Some(s),
+            None => {
+                *argument = r.0.to_string();
+                None
+            }
+        }
+    } else if ch == IND_FORMULA_ROUNDED {
+        let r = extract_formula_to_float(chars.as_str());
+        return  match r.1 {
+            Some(s) => return Some(s),
+            None => {
+                *argument = (r.0.round() as i32).to_string();
+                None
+            }
+        }
+    }
+
+    None
 }
 
 fn char_to_operator(c: char) -> Option<Operator> {
