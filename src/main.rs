@@ -4,12 +4,21 @@ use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
+use std::thread::current;
 use crate::keyword::*;
 use crate::Operator::{Add, Div, Mul, NoOperator, Sub};
 
 mod keyword;
 
-pub const PROGRAM: &str = "flag a35;var int a 45;shout b\n;terminate $a;jump a35";
+
+/* TODO: - Finish formula parsing
+         - Add conditions
+         - Add pre-processor
+         - Improve code quality and fix bugs
+         - Improve instruction splitter
+         - Add comments
+ */
+pub const PROGRAM: &str = "var int a 1;var int b 2;var int ~($a+$b) ~($a/$b);shout $3;shout \n;terminate $3";
 pub static mut INSTRUCTION_POINTER: isize = 0;
 pub static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -70,7 +79,7 @@ fn main() {
         while INSTRUCTION_POINTER >= 0 && INSTRUCTION_POINTER.cast_unsigned() < operations.len() {
             INSTRUCTION_COUNTER += 1;
             let operation = *operations.get(INSTRUCTION_POINTER.cast_unsigned()).unwrap();
-            let mut operation_and_context = operation.splitn(2, " ");
+            let mut operation_and_context = operation.splitn(2, ARGUMENT_SEPARATOR);
             let last_instr_pointer = INSTRUCTION_POINTER;
             INSTRUCTION_POINTER += 1;
             let error_details = interpret_instruction(operation_and_context.next().unwrap(), operation_and_context.next().unwrap_or(""));
@@ -102,18 +111,27 @@ fn main() {
     }
 }
 
-fn interpret_instruction(instruction: &str, context: &str) -> Option<String> {
+fn interpret_instruction(instruction: &str, context_raw: &str) -> Option<String> {
     match instruction {
-        INSTR_TERMINATE => instr_terminate(prepare_context(context)),
-        INSTR_FLAG => instr_flag(prepare_context(context)),
-        INSTR_JUMP => instr_jump(prepare_context(context)),
-        INSTR_SHOUT => instr_shout(context),
-        INSTR_VAR => instr_var(prepare_context(context)),
-        _ => Some(format!("Instruction not found \"{}\"", instruction))
+        INSTR_SHOUT => instr_shout(context_raw),
+        _ => {
+            let result = prepare_context(context_raw);
+            if result.1.is_some() {
+                return result.1;
+            }
+
+            return match instruction {
+                INSTR_TERMINATE => instr_terminate(result.0),
+                INSTR_FLAG => instr_flag(result.0),
+                INSTR_JUMP => instr_jump(result.0),
+                INSTR_VAR => instr_var(result.0),
+                _ => Some(format!("Instruction not found \"{}\"", instruction))
+            }
+        }
     }
 }
 
-fn instr_terminate(context_raw: Vec<&str>) -> Option<String> {
+fn instr_terminate(context_raw: Vec<String>) -> Option<String> {
     let mut argument: String = match context_raw.get(0) {
         Some(arg) => (*arg).to_string(),
         None => return Some("Termination code argument is missing".to_string()),
@@ -125,15 +143,6 @@ fn instr_terminate(context_raw: Vec<&str>) -> Option<String> {
     }
 
     let exit_code;
-    let mut chars  = argument.chars();
-    if chars.next().unwrap() == IND_RESOLVE_VARIABLE {
-        let result  = resolve_variable(&*chars.collect::<String>());
-
-        match result.1 {
-            Some(a) => return Some(a),
-            None => argument = result.0.to_string()
-        }
-    }
 
     exit_code = match argument.parse::<u8>() {
         Ok(code) => code,
@@ -153,9 +162,9 @@ fn instr_terminate(context_raw: Vec<&str>) -> Option<String> {
     None
 }
 
-fn instr_flag(context: Vec<&str>) -> Option<String> {
+fn instr_flag(context: Vec<String>) -> Option<String> {
     let argument = match context.get(0) {
-        Some(arg) => *arg,
+        Some(arg) => arg,
         None => return Some("Flag label required".to_string()),
     };
 
@@ -173,9 +182,9 @@ fn instr_flag(context: Vec<&str>) -> Option<String> {
     }
 }
 
-fn instr_jump(context: Vec<&str>) -> Option<String> {
+fn instr_jump(context: Vec<String>) -> Option<String> {
     let argument = match context.get(0) {
-        Some(arg) => *arg,
+        Some(arg) => arg,
         None => return Some("Jump label required".to_string()),
     };
 
@@ -219,7 +228,7 @@ fn instr_shout(context_raw: &str) -> Option<String> {
     None
 }
 
-fn instr_var(context: Vec<&str>) -> Option<String> {
+fn instr_var(context: Vec<String>) -> Option<String> {
     let name_and_option = instr_var_sub_name(context.clone());
 
     if context.len() > 3 {
@@ -230,19 +239,19 @@ fn instr_var(context: Vec<&str>) -> Option<String> {
         Some(a) if *a == TYPE_BOOL => {
             match name_and_option.1 {
                 Some(msg) => Some(msg),
-                None => instr_var_sub_bool(name_and_option.0, context)
+                None => instr_var_sub_bool(&*name_and_option.0, context)
             }
         },
         Some(a) if *a == TYPE_INT => {
             match name_and_option.1 {
                 Some(msg) => Some(msg),
-                None => instr_var_sub_int(name_and_option.0, context)
+                None => instr_var_sub_int(&*name_and_option.0, context)
             }
         },
         Some(a) if *a == TYPE_FLOAT => {
             match name_and_option.1 {
                 Some(msg) => Some(msg),
-                None => instr_var_sub_float(name_and_option.0, context)
+                None => instr_var_sub_float(&*name_and_option.0, context)
             }
         },
         Some(a) => Some(format!("Variable type not recognize \"{a}\"")),
@@ -250,22 +259,22 @@ fn instr_var(context: Vec<&str>) -> Option<String> {
     }
 }
 
-fn instr_var_sub_name(context: Vec<&str>) -> (&str, Option<String>) {
+fn instr_var_sub_name(context: Vec<String>) -> (String, Option<String>) {
     match context.get(1) {
         Some(v) => {
             for c in v.chars() {
                 if !VARIABLE_NAME_CHARS.contains(&c) {
-                    return ("", Some(format!("Invalid character in variable name \"{c}\"")));
+                    return ("".to_string(), Some(format!("Invalid character in variable name \"{c}\"")));
                 }
             }
 
-            (*v, None)
+            (v.to_string(), None)
         },
-        None => ("", Some("Variable name required".to_string()))
+        None => ("".to_string(), Some("Variable name required".to_string()))
     }
 }
 
-fn instr_var_sub_bool(name: &str, context: Vec<&str>) -> Option<String> {
+fn instr_var_sub_bool(name: &str, context: Vec<String>) -> Option<String> {
     match context.get(2) {
         Some(b) => {
             let var_value;
@@ -285,7 +294,7 @@ fn instr_var_sub_bool(name: &str, context: Vec<&str>) -> Option<String> {
     }
 }
 
-fn instr_var_sub_int(name: &str, context: Vec<&str>) -> Option<String> {
+fn instr_var_sub_int(name: &str, context: Vec<String>) -> Option<String> {
     match context.get(2) {
         Some(i) => {
             let var_value;
@@ -304,7 +313,7 @@ fn instr_var_sub_int(name: &str, context: Vec<&str>) -> Option<String> {
 }
 
 
-fn instr_var_sub_float(name: &str, context: Vec<&str>) -> Option<String> {
+fn instr_var_sub_float(name: &str, context: Vec<String>) -> Option<String> {
     match context.get(2) {
         Some(i) => {
             let var_value;
@@ -360,54 +369,68 @@ fn create_too_many_args_error(expected: usize, given: usize) -> String {
     }
 }
 
-fn extract_formula_to_int(formula: &str) -> (i32, Option<String>) {
-    let chars = formula.chars();
+fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
+    let result = extract_sub_formulas(formula);
 
-    let mut sub_formulas = Vec::new();
-    let mut current = String::new();
-    let mut open_bracket = false;
-    let mut bracket_was_closed_last = false;
-    let mut sub_formulas_operators = Vec::new();
-    for char in chars {
-        if bracket_was_closed_last {
-            sub_formulas_operators.push(match char_to_operator(char) {
-                Some(o) => o,
-                None => return (0, Some(format!("Operator or end expected after closing bracket in formula \"{formula}\"")))
-            });
+    if result.2.is_some() {
+        return (0_f32, result.2);
 
-            continue
-        }
-
-        if char == '(' {
-            if open_bracket {
-                return (0, Some(format!("Invalid double opening bracket in formula \"{formula}\"")))
-            }
-            open_bracket = true;
-        } else if char == ')' {
-            if !open_bracket {
-                return (0, Some(format!("Closing bracket without opening bracket in formula \"{formula}\"")))
-            }
-
-            sub_formulas.push(std::mem::take(&mut current));;
-            bracket_was_closed_last = true;
-            open_bracket = false;
-        } else {
-            current.push(char)
-        }
     }
+
+    let sub_formulas = result.0;
+    let sub_formulas_operators = result.1;
 
     let mut results = Vec::new();
     for sub_formula in sub_formulas {
         if sub_formula.len() < 3 {
-            return (0, Some(format!("Sub-formula \"{sub_formula}\" does not match pattern [operand][operator][operand]")))
+            return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" does not match pattern [operand][operator][operand]")))
         }
 
         let mut operand1 = String::new();
         let mut operand2 = String::new();
         let mut operator = NoOperator;
+        let mut is_reading_variable = false;
         let mut is_first_part = true;
+        let mut latest_variable_string = String::new();
         for char in sub_formula.chars()  {
-            if char.is_ascii_digit() {
+            if char == IND_RESOLVE_VARIABLE {
+                is_reading_variable = true;
+                continue;
+            }
+
+            if is_reading_variable {
+                if (!operand1.is_empty() && operator == NoOperator) || !operand2.is_empty()  {
+                    return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" contains a variable resolve in an invalid position")))
+                }
+
+                let potential_operator = char_to_operator(char);
+                if potential_operator != None {
+                    operator = potential_operator.unwrap();
+
+                    let resolved_result = resolve_variable_to_type(latest_variable_string.as_str(), VarValue::Int(0));
+                    match resolved_result.1 {
+                        Some(s) => return (0_f32, Some(s)),
+                        None => (),
+                    }
+
+                    if is_first_part {
+                        operand1 = resolved_result.0.to_string();
+                    } else {
+                        return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" contains an operator in an invalid position")))
+                    }
+
+                    latest_variable_string = String::new();
+                    is_reading_variable = false;
+                    is_first_part = false;
+
+                    continue
+                }
+                
+                latest_variable_string.push(char);
+                continue
+            }
+
+            if char.is_ascii_digit() || char == DECIMAL_SEPARATOR {
                 if is_first_part {
                     operand1.push(char)
                 } else {
@@ -419,45 +442,146 @@ fn extract_formula_to_int(formula: &str) -> (i32, Option<String>) {
             match char_to_operator(char) {
                 Some(o) => {
                     if operator != NoOperator {
-                        return (0, Some(format!("Sub-formula \"{sub_formula}\" contain a repetitive operator")))
+                        return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" contain more than one operator")))
                     }
                     operator = o;
+                    is_first_part = false;
                 },
-                None => return (0, Some(format!("Sub-formula \"{sub_formula}\" contains a character that is not allowed: \"{char}\"")))
+                None => return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" contains a character that is not allowed: \"{char}\"")))
             }
 
         }
-        results.push(apply_operation_int(i32::from_str(operand1.as_str()).unwrap(), i32::from_str(operand2.as_str()).unwrap(), operator));
+        
+        if is_reading_variable {
+            let resolved_result = resolve_variable_to_type(latest_variable_string.as_str(), VarValue::Int(0));
+            match resolved_result.1 {
+                Some(s) => return (0_f32, Some(s)),
+                None => (),
+            }
+
+            operand2 = resolved_result.0.to_string();
+        }
+        results.push(apply_operation_float(f32::from_str(operand1.as_str()).unwrap(), f32::from_str(operand2.as_str()).unwrap(), operator));
     }
 
     let mut current_number = results.remove(0);
     for (i,result) in results.iter().enumerate()  {
-        current_number = apply_operation_int(current_number,*result, *sub_formulas_operators.get(i).unwrap())
+        current_number = apply_operation_float(current_number,*result, *sub_formulas_operators.get(i).unwrap())
     }
 
     (current_number, None)
 }
 
-fn prepare_context(context: &str) -> Vec<&str> {
-    context.split(" ").collect()
+fn extract_sub_formulas(formula: &str) -> (Vec<String>, Vec<Operator>, Option<String>) {
+    let chars = formula.chars();
+    let mut current = String::new();
+    let mut open_bracket = false;
+    let mut bracket_was_closed_last = false;
+    let mut sub_formulas = Vec::new();
+    let mut sub_formulas_operators = Vec::new();
+
+    for char in chars {
+        if bracket_was_closed_last {
+            sub_formulas_operators.push(match char_to_operator(char) {
+                Some(o) => o,
+                None => return (Vec::new(), Vec::new(), Some(format!("Operator or end expected after closing bracket in formula \"{formula}\"")))
+            });
+
+            bracket_was_closed_last = false;
+            current = String::new();
+            continue
+        }
+
+        if char == '(' {
+            if open_bracket {
+                return (Vec::new(), Vec::new(), Some(format!("Invalid double opening bracket in formula \"{formula}\"")))
+            }
+            open_bracket = true;
+        } else if char == ')' {
+            if !open_bracket {
+                return (Vec::new(), Vec::new(), Some(format!("Closing bracket without opening bracket in formula \"{formula}\"")))
+            }
+
+            sub_formulas.push(std::mem::take(&mut current));
+
+            bracket_was_closed_last = true;
+            open_bracket = false;
+        } else {
+            current.push(char)
+        }
+    }
+
+    (sub_formulas, sub_formulas_operators, None)
+}
+
+fn prepare_context(context: &str) -> (Vec<String>, Option<String>) {
+    let mut split_context: Vec<String> = context.split(ARGUMENT_SEPARATOR).map(String::from).collect();
+
+    let mut i = 0;
+    while i < split_context.len()  {
+        if split_context[i].is_empty() {
+            split_context.remove(i);
+            continue;
+        }
+
+        let mut chars = split_context[i].chars();
+
+        let ch = chars.next().unwrap();
+
+        if ch == IND_STRING_IGNORE {
+            split_context[i] = chars.as_str().to_string();
+            continue;
+        } else if ch == IND_RESOLVE_VARIABLE {
+            let r = resolve_variable(chars.as_str());
+            match r.1 {
+                Some(s) => return (Vec::new(), Some(s)),
+                None => {
+                    split_context[i] = r.0.to_string()
+                }
+            }
+            continue;
+        } else if ch == IND_FORMULA_FLOAT {
+            let r = extract_formula_to_float(chars.as_str());
+            match r.1 {
+                Some(s) => return (Vec::new(), Some(s)),
+                None => {
+                    split_context[i] = r.0.to_string()
+                }
+            }
+            continue;
+        } else if ch == IND_FORMULA_ROUNDED {
+            let r = extract_formula_to_float(chars.as_str());
+            match r.1 {
+                Some(s) => return (Vec::new(), Some(s)),
+                None => {
+                    split_context[i] = (r.0.round() as i32).to_string();
+                }
+            }
+            continue;
+        }
+
+        i+=1;
+    }
+
+   (split_context, None)
 }
 
 fn char_to_operator(c: char) -> Option<Operator> {
     Some(match c {
-        '+' => Add,
-        '-' => Sub,
-        '*' => Mul,
-        '/' => Div,
+        OPERATOR_ADD => Add,
+        OPERATOR_SUB => Sub,
+        OPERATOR_MUL => Mul,
+        OPERATOR_DIV => Div,
         _ => return None
     })
 }
 
-fn apply_operation_int(operand1: i32, operand2: i32, operator: Operator) -> i32 {
+fn apply_operation_float(operand1: f32, operand2: f32, operator: Operator) -> f32 {
     match operator  {
         Add => operand1+operand2,
         Sub => operand1-operand2,
         Mul => operand1*operand2,
         Div => operand1/operand2,
-        _ => 0,
+        _ => 0_f32,
     }
 }
