@@ -11,14 +11,14 @@ use crate::Operator::{Add, Div, Mul, NoOperator, Sub};
 mod keyword;
 
 
-/* TODO: - Finish formula parsing
+/* TODO: - Improve formula parsing
          - Add conditions
          - Add pre-processor
          - Improve code quality and fix bugs
          - Improve instruction splitter
          - Add comments
  */
-pub const PROGRAM: &str = "var int a 1;var int b 2;var int ~($a+$b) ~($a/$b);shout $3;shout \n;terminate $3";
+pub const PROGRAM: &str = "var int a 1;var int b 2;var int ~($a+$b) ~($a/$b);shout $3;shout \n;terminate ~($3-2)+(2*1)";
 pub static mut INSTRUCTION_POINTER: isize = 0;
 pub static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -382,8 +382,8 @@ fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
 
     let mut results = Vec::new();
     for sub_formula in sub_formulas {
-        if sub_formula.len() < 3 {
-            return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" does not match pattern [operand][operator][operand]")))
+        if sub_formula.is_empty() {
+            return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" is empty")))
         }
 
         let mut operand1 = String::new();
@@ -442,7 +442,7 @@ fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
             match char_to_operator(char) {
                 Some(o) => {
                     if operator != NoOperator {
-                        return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" contain more than one operator")))
+                        return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" contains more than one operator")))
                     }
                     operator = o;
                     is_first_part = false;
@@ -459,9 +459,19 @@ fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
                 None => (),
             }
 
-            operand2 = resolved_result.0.to_string();
+            if is_first_part {
+                operand1 = resolved_result.0.to_string();
+            } else {
+                operand2 = resolved_result.0.to_string();
+            }
+
         }
-        results.push(apply_operation_float(f32::from_str(operand1.as_str()).unwrap(), f32::from_str(operand2.as_str()).unwrap(), operator));
+
+        if operand2.is_empty() {
+            results.push(f32::from_str(operand1.as_str()).unwrap())
+        } else {
+            results.push(apply_operation_float(f32::from_str(operand1.as_str()).unwrap(), f32::from_str(operand2.as_str()).unwrap(), operator));
+        }
     }
 
     let mut current_number = results.remove(0);
@@ -499,7 +509,7 @@ fn extract_sub_formulas(formula: &str) -> (Vec<String>, Vec<Operator>, Option<St
             open_bracket = true;
         } else if char == ')' {
             if !open_bracket {
-                return (Vec::new(), Vec::new(), Some(format!("Closing bracket without opening bracket in formula \"{formula}\"")))
+                return (Vec::new(), Vec::new(), Some(format!("Missing opening bracket in formula \"{formula}\"")))
             }
 
             sub_formulas.push(std::mem::take(&mut current));
@@ -509,6 +519,10 @@ fn extract_sub_formulas(formula: &str) -> (Vec<String>, Vec<Operator>, Option<St
         } else {
             current.push(char)
         }
+    }
+
+    if !bracket_was_closed_last {
+        return (Vec::new(), Vec::new(), Some(format!("Missing closing bracket in formula \"{formula}\"")))
     }
 
     (sub_formulas, sub_formulas_operators, None)
