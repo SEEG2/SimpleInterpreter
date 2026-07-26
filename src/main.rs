@@ -19,7 +19,7 @@ mod keyword;
          - Improve instruction splitter
          - Add comments
  */
-pub const PROGRAM: &str = "var int a ~(-1+-2)-(-2);shout $a";
+pub const PROGRAM: &str = "var int a ~(2)+(3)*(4)*(5);shout $a";
 pub static mut INSTRUCTION_POINTER: isize = 0;
 pub static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -443,7 +443,7 @@ fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
             if operator == Mul || operator == Div {
                 results[i] = apply_operation_float(results[i],results.remove(i+1), operator);
                 sub_formulas_operators.remove(i);
-                break 'outer;
+                continue 'outer;
             }
         }
 
