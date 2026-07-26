@@ -19,7 +19,7 @@ mod keyword;
          - Improve instruction splitter
          - Add comments
  */
-pub const PROGRAM: &str = "var int count 0;flag loop;var str counter_label Counter:;var int count #($count+1);shout $counter_label;shout $count;shout \n;jump loop";
+pub const PROGRAM: &str = "var str test \"a a  a   a    \";shout $test";
 pub static mut INSTRUCTION_POINTER: isize = 0;
 pub static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -136,14 +136,14 @@ fn interpret_instruction(instruction: &str, context_raw: &str) -> Option<String>
 }
 
 fn instr_terminate(context_raw: Vec<String>) -> Option<String> {
-    let mut argument: String = match context_raw.get(0) {
+    let argument: String = match context_raw.get(0) {
         Some(arg) => (*arg).to_string(),
         None => return Some("Termination code argument is missing".to_string()),
     };
 
 
     if context_raw.len() > 1 {
-        return Some(create_too_many_args_error(1, context_raw.len()))
+        return Some(create_wrong_args_count_error(1, context_raw.len()))
     }
 
     let exit_code;
@@ -173,7 +173,7 @@ fn instr_flag(context: Vec<String>) -> Option<String> {
     };
 
     if context.len() > 1 {
-        return Some(create_too_many_args_error(1, context.len()))
+        return Some(create_wrong_args_count_error(1, context.len()))
     }
 
     unsafe {
@@ -193,7 +193,7 @@ fn instr_jump(context: Vec<String>) -> Option<String> {
     };
 
     if context.len() > 1 {
-        return Some(create_too_many_args_error(1, context.len()))
+        return Some(create_wrong_args_count_error(1, context.len()))
     }
 
     unsafe {
@@ -223,8 +223,9 @@ fn instr_shout(context_raw: &str) -> Option<String> {
 }
 
 fn instr_var(context: Vec<String>) -> Option<String> {
-    if context.len() > 3 {
-        return Some(create_too_many_args_error(3, context.len()))
+    let arg_count = context.len();
+    if arg_count != 3 {
+        return Some(create_wrong_args_count_error(3, arg_count))
     }
 
     let expected_type;
@@ -244,7 +245,7 @@ fn instr_var(context: Vec<String>) -> Option<String> {
     let var_name = &context[1];
     for c in var_name.chars() {
         if !VARIABLE_NAME_CHARS.contains(&c) {
-            return Some(format!("Invalid character in variable name \"{c}\""));
+            return Some(format!("Invalid character '{c}' in variable name \"{var_name}\""));
         }
     }
 
@@ -318,11 +319,11 @@ fn resolve_variable_to_f32(key: &str) -> (f32, Option<String>) {
     }
 }
 
-fn create_too_many_args_error(expected: usize, given: usize) -> String {
+fn create_wrong_args_count_error(expected: usize, given: usize) -> String {
     if expected == 1 {
-        format!("This function takes 1 argument, but {given} were given")
+        format!("This call takes 1 argument, but {given} were given")
     } else {
-        format!("This function takes {expected} arguments, but {given} were given")
+        format!("This call takes {expected} arguments, but {given} were given")
     }
 }
 
@@ -499,16 +500,49 @@ fn extract_sub_formulas(formula: &str) -> (Vec<String>, Vec<Operator>, Option<St
 }
 
 fn prepare_context(context: &str) -> (Vec<String>, Option<String>) {
-    let mut split_context: Vec<String> = context.split(ARGUMENT_SEPARATOR).map(String::from).collect();
+    let mut arguments= Vec::new();
+    let mut is_string_literal_open = false;
+    let mut current_arg = String::new();
+    let mut should_ignore_next_char = false;
+    for c in context.chars()  {
+        if should_ignore_next_char {
+            current_arg.push(c);
+            should_ignore_next_char = false;
+        } else if is_string_literal_open {
+            if c == STR_LITERAL_INDICATOR {
+                is_string_literal_open = false;
+                continue;
+            }
+            current_arg.push(c);
+        } else if c == STR_LITERAL_INDICATOR {
+            is_string_literal_open = true;
+        } else if c == IND_STRING_IGNORE {
+            if current_arg.is_empty() {
+                current_arg.push(c);
+            }
+            should_ignore_next_char = true;
+        } else if c == ARGUMENT_SEPARATOR && !is_string_literal_open {
+            if current_arg.is_empty() {
+                continue
+            }
+            arguments.push(current_arg.clone());
+            current_arg = String::new();
+        } else {
+            current_arg.push(c);
+        }
+    }
+
+    if is_string_literal_open {
+        return (Vec::new(), Some("String literal was opened but never closed".to_string()))
+    }
+
+    if !is_string_literal_open && !current_arg.is_empty() {
+        arguments.push(current_arg)
+    }
 
     let mut i = 0;
-    while i < split_context.len()  {
-        if split_context[i].is_empty() {
-            split_context.remove(i);
-            continue;
-        }
-
-        match prepare_argument(&mut split_context[i]) {
+    while i < arguments.len()  {
+        match prepare_argument(&mut arguments[i]) {
             Some(s) => return (Vec::new(), Some(s)),
             None => {}
         }
@@ -516,13 +550,12 @@ fn prepare_context(context: &str) -> (Vec<String>, Option<String>) {
         i+=1;
     }
 
-   (split_context, None)
+   (arguments, None)
 }
 
 fn prepare_argument(argument: &mut String) -> Option<String> {
-    if argument.is_empty() {
-        return Some("Empty argument was provided".to_string())
-    }
+    assert!(!argument.is_empty());
+
     let mut chars = argument.chars();
 
     let ch = chars.next().unwrap();

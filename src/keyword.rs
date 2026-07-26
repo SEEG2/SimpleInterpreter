@@ -19,6 +19,7 @@ pub const OPERATOR_MUL: char = '*';
 pub const OPERATOR_DIV: char = '/';
 pub const DECIMAL_SEPARATOR: char = '.';
 pub const ARGUMENT_SEPARATOR: char = ' ';
+pub const STR_LITERAL_INDICATOR: char = '"';
 pub const VARIABLE_NAME_CHARS: &[char] = &['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',
     '0','1','2','3','4','5','6','7','8','9',
     '_'];
