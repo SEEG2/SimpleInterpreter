@@ -12,14 +12,14 @@ use crate::Operator::{Add, Div, Mul, NoOperator, Sub};
 mod keyword;
 
 
-/* TODO: - Improve formula parsing
+/* TODO:
          - Add conditions
          - Add pre-processor
          - Improve code quality and fix bugs
          - Improve instruction splitter
          - Add comments
  */
-pub const PROGRAM: &str = "var str test \"a a  a   a    \";shout $test";
+pub const PROGRAM: &str = "var int a ~(-1+-2)-(-2);shout $a";
 pub static mut INSTRUCTION_POINTER: isize = 0;
 pub static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -399,11 +399,16 @@ fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
 
             match char_to_operator(char) {
                 Some(o) => {
-                    if operator != NoOperator {
-                        return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" contains more than one operator")))
+                    if operand1.is_empty() {
+                        operand1.push(char)
+                    } else if operator == NoOperator {
+                        operator = o;
+                        is_first_part = false;
+                    } else if operand2.is_empty() {
+                        operand2.push(char);
+                    } else {
+                        return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" contains an operator in an invalid position")))
                     }
-                    operator = o;
-                    is_first_part = false;
                 },
                 None => return (0_f32, Some(format!("Sub-formula \"{sub_formula}\" contains a character that is not allowed: \"{char}\"")))
             }
@@ -487,6 +492,8 @@ fn extract_sub_formulas(formula: &str) -> (Vec<String>, Vec<Operator>, Option<St
 
             bracket_was_closed_last = true;
             open_bracket = false;
+        } else if open_bracket == false  {
+            return (Vec::new(), Vec::new(), Some(format!("Invalid content outside of brackets in formula \"{formula}\"")))
         } else {
             current.push(char)
         }
