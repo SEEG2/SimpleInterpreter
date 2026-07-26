@@ -2,6 +2,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
+use std::env::var;
 use std::fmt::Display;
 use std::str::FromStr;
 use std::thread::current;
@@ -18,7 +19,7 @@ mod keyword;
          - Improve instruction splitter
          - Add comments
  */
-pub const PROGRAM: &str = "var int a 1;var int b 2;var int ~($a+$b) ~($a/$b);shout $3;shout \n;shout ~(2)+(4)*(2);shout \n;terminate ~($3-2)+(2*1)";
+pub const PROGRAM: &str = "var int count 0;flag loop;var str counter_label Counter:;var int count #($count+1);shout $counter_label;shout $count;shout \n;jump loop";
 pub static mut INSTRUCTION_POINTER: isize = 0;
 pub static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -34,7 +35,7 @@ thread_local! {
 
 #[derive(Clone)]
 enum VarValue {
-    Bool(bool), Int(i32), Float(f32)
+    Bool(bool), Int(i32), Float(f32), Str(String)
 }
 
 impl VarValue {
@@ -43,7 +44,8 @@ impl VarValue {
             (self, other),
             (VarValue::Bool(_), VarValue::Bool(_)) |
             (VarValue::Int(_), VarValue::Int(_)) |
-            (VarValue::Float(_), VarValue::Float(_))
+            (VarValue::Float(_), VarValue::Float(_)) |
+            (VarValue::Str(_), VarValue::Str(_))
         )
     }
 
@@ -51,15 +53,17 @@ impl VarValue {
         match self {
             VarValue::Bool(v) => v.to_string(),
             VarValue::Int(v) => v.to_string(),
-            VarValue::Float(v) => v.to_string()
+            VarValue::Float(v) => v.to_string(),
+            VarValue::Str(v) => v.to_string()
         }
     }
 
     fn type_to_string(&self) -> String {
         match self {
-            VarValue::Bool(v) => "bool".to_string(),
-            VarValue::Int(v) => "int".to_string(),
-            VarValue::Float(v) => "float".to_string()
+            VarValue::Bool(_) => TYPE_BOOL.to_string(),
+            VarValue::Int(_) => TYPE_INT.to_string(),
+            VarValue::Float(_) => TYPE_FLOAT.to_string(),
+            VarValue::Str(_) => TYPE_STR.to_string()
         }
     }
 }
@@ -219,105 +223,69 @@ fn instr_shout(context_raw: &str) -> Option<String> {
 }
 
 fn instr_var(context: Vec<String>) -> Option<String> {
-    let name_and_option = instr_var_sub_name(context.clone());
-
     if context.len() > 3 {
         return Some(create_too_many_args_error(3, context.len()))
     }
 
-    match context.get(0) {
-        Some(a) if *a == TYPE_BOOL => {
-            match name_and_option.1 {
-                Some(msg) => Some(msg),
-                None => instr_var_sub_bool(&*name_and_option.0, context)
-            }
-        },
-        Some(a) if *a == TYPE_INT => {
-            match name_and_option.1 {
-                Some(msg) => Some(msg),
-                None => instr_var_sub_int(&*name_and_option.0, context)
-            }
-        },
-        Some(a) if *a == TYPE_FLOAT => {
-            match name_and_option.1 {
-                Some(msg) => Some(msg),
-                None => instr_var_sub_float(&*name_and_option.0, context)
-            }
-        },
-        Some(a) => Some(format!("Variable type not recognize \"{a}\"")),
-        _ => Some("Variable type required".to_string())
+    let expected_type;
+    let var_type = &context[0];
+    if var_type == TYPE_BOOL {
+        expected_type = VarValue::Bool(false)
+    } else if var_type == TYPE_INT {
+        expected_type = VarValue::Int(0)
+    } else if var_type == TYPE_FLOAT {
+        expected_type = VarValue::Float(0_f32)
+    } else if var_type == TYPE_STR {
+        expected_type = VarValue::Str(String::new())
+    } else {
+        return Some(format!("Variable type not recognize \"{var_type}\""))
     }
-}
 
-fn instr_var_sub_name(context: Vec<String>) -> (String, Option<String>) {
-    match context.get(1) {
-        Some(v) => {
-            for c in v.chars() {
-                if !VARIABLE_NAME_CHARS.contains(&c) {
-                    return ("".to_string(), Some(format!("Invalid character in variable name \"{c}\"")));
-                }
-            }
-
-            (v.to_string(), None)
-        },
-        None => ("".to_string(), Some("Variable name required".to_string()))
-    }
-}
-
-fn instr_var_sub_bool(name: &str, context: Vec<String>) -> Option<String> {
-    match context.get(2) {
-        Some(b) => {
-            let var_value;
-
-            if *b == "true" {
-                var_value = true;
-            } else if *b == "false" {
-                var_value = false;
-            } else {
-                return Some(format!("Not a valid boolean value \"{b}\""))
-            }
-
-            instr_var_sub_insert(name, VarValue::Bool(var_value));
-            None
+    let var_name = &context[1];
+    for c in var_name.chars() {
+        if !VARIABLE_NAME_CHARS.contains(&c) {
+            return Some(format!("Invalid character in variable name \"{c}\""));
         }
-        None => Some("Variable value required".to_string())
     }
-}
 
-fn instr_var_sub_int(name: &str, context: Vec<String>) -> Option<String> {
-    match context.get(2) {
-        Some(i) => {
-            let var_value;
-
-            match i32::from_str(i) {
-                Ok(a) => var_value = a,
-                Err(_) => {
-                    return Some(format!("Not a valid integer value \"{i}\""))
-                }
+    let value = &context[2];
+    match expected_type {
+        VarValue::Bool(_) => {
+            match value.parse::<bool>() {
+                Ok(b) => {
+                    instr_var_sub_insert(var_name.as_str(), VarValue::Bool(b));
+                    None
+                },
+                Err(_) => Some(format!("Value \"{value}\" is not of type {TYPE_BOOL}")),
             }
-            instr_var_sub_insert(name, VarValue::Int(var_value));
-            None
         }
-        None => Some("Variable value required".to_string())
-    }
-}
-
-
-fn instr_var_sub_float(name: &str, context: Vec<String>) -> Option<String> {
-    match context.get(2) {
-        Some(i) => {
-            let var_value;
-
-            match f32::from_str(i) {
-                Ok(a) => var_value = a,
-                Err(_) => {
-                    return Some(format!("Not a valid float value \"{i}\""))
-                }
+        VarValue::Int(_) => {
+            match value.parse::<i32>() {
+                Ok(i) => {
+                    instr_var_sub_insert(var_name.as_str(), VarValue::Int(i));
+                    None
+                },
+                Err(_) => Some(format!("Value \"{value}\" is not of type {TYPE_INT}")),
             }
-            instr_var_sub_insert(name, VarValue::Float(var_value));
-            None
         }
-        None => Some("Variable value required".to_string())
+        VarValue::Float(_) => {
+            match value.parse::<f32>() {
+                Ok(f) => {
+                    instr_var_sub_insert(var_name.as_str(), VarValue::Float(f));
+                    None
+                },
+                Err(_) => Some(format!("Value \"{value}\" is not of type {TYPE_FLOAT}")),
+            }
+        }
+        VarValue::Str(_) => {
+            match value.parse::<String>() {
+                Ok(s) => {
+                    instr_var_sub_insert(var_name.as_str(), VarValue::Str(s));
+                    None
+                },
+                Err(_) => Some(format!("Value \"{value}\" is not of type {TYPE_STR}")),
+            }
+        }
     }
 }
 
@@ -336,19 +304,18 @@ fn resolve_variable(key: &str) -> (VarValue, Option<String>) {
     })
 }
 
-fn resolve_variable_to_type(key: &str, expected_type: VarValue) -> (VarValue, Option<String>) {
+fn resolve_variable_to_f32(key: &str) -> (f32, Option<String>) {
     let result = resolve_variable(key);
 
     match result.1  {
-        Some(a) => return (VarValue::Bool(false), Some(a)),
+        Some(a) => return (0_f32, Some(a)),
         None => {},
     }
 
-    if !result.0.clone().is_same_type(&expected_type) {
-        return (VarValue::Bool(false), Some(format!("Variable {key} is of type {} is expected to be of type {}", result.0.clone().type_to_string(), expected_type.type_to_string())))
+    match result.0.to_string().parse::<f32>() {
+        Ok(f) => (f, None),
+        Err(_) => (0_f32, Some(format!("Failed to parse variable \"{key}\" of type {} to a numeric value", result.0.type_to_string())))
     }
-
-    (result.0, None)
 }
 
 fn create_too_many_args_error(expected: usize, given: usize) -> String {
@@ -397,7 +364,7 @@ fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
                 if potential_operator != None {
                     operator = potential_operator.unwrap();
 
-                    let resolved_result = resolve_variable_to_type(latest_variable_string.as_str(), VarValue::Int(0));
+                    let resolved_result = resolve_variable_to_f32(latest_variable_string.as_str());
                     match resolved_result.1 {
                         Some(s) => return (0_f32, Some(s)),
                         None => (),
@@ -443,7 +410,7 @@ fn extract_formula_to_float(formula: &str) -> (f32, Option<String>) {
         }
         
         if is_reading_variable {
-            let resolved_result = resolve_variable_to_type(latest_variable_string.as_str(), VarValue::Int(0));
+            let resolved_result = resolve_variable_to_f32(latest_variable_string.as_str());
             match resolved_result.1 {
                 Some(s) => return (0_f32, Some(s)),
                 None => (),

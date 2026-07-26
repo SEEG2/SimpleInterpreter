@@ -12,6 +12,7 @@ pub const IND_FORMULA_ROUNDED: char = '~';
 pub const TYPE_BOOL: &str = "bool";
 pub const TYPE_INT: &str = "int";
 pub const TYPE_FLOAT: &str = "float";
+pub const TYPE_STR: &str = "str";
 pub const OPERATOR_ADD: char = '+';
 pub const OPERATOR_SUB: char = '-';
 pub const OPERATOR_MUL: char = '*';
