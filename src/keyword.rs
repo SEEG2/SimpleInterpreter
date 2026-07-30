@@ -13,11 +13,26 @@ pub const TYPE_BOOL: &str = "bool";
 pub const TYPE_INT: &str = "int";
 pub const TYPE_FLOAT: &str = "float";
 pub const TYPE_STR: &str = "str";
+
 pub const OPERATOR_ADD: char = '+';
 pub const OPERATOR_SUB: char = '-';
 pub const OPERATOR_MUL: char = '*';
 pub const OPERATOR_DIV: char = '/';
+
+pub const FORMULA_OPENING_BRACKET: char = '(';
+pub const FORMULA_CLOSING_BRACKET: char = ')';
+
 pub const DECIMAL_SEPARATOR: char = '.';
+
+pub const BOOL_OPERATOR_AND: char = '&';
+pub const BOOL_OPERATOR_OR: char = '|';
+pub const BOOL_OPERATOR_XOR: char = '^';
+pub const BOOL_OPERATOR_NOT: char = '!';
+
+pub const BOOL_COMPARATOR_EQUAL: char = '=';
+pub const BOOL_COMPARATOR_LESS_THAN: char = '<';
+
+pub const NONE_DISPLAY: char = '\0';
 pub const ARGUMENT_SEPARATOR: char = ' ';
 pub const STR_LITERAL_INDICATOR: char = '"';
 pub const VARIABLE_NAME_CHARS: &[char] = &['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',
