@@ -6,7 +6,7 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use crate::FormulaElement::{ClosingBracket, Number, NumericOperator};
 use crate::keyword::*;
-use crate::Operator::{Add, Div, Mul, NoOperator, Sub};
+use crate::Operator::{Add, Div, Mul, Sub};
 
 mod keyword;
 /* TODO:
@@ -76,8 +76,7 @@ enum Operator {
     Add,
     Sub,
     Mul,
-    Div,
-    NoOperator
+    Div
 }
 
 impl Display for Operator {
@@ -87,7 +86,6 @@ impl Display for Operator {
             Sub => write!(f, "{OPERATOR_SUB}"),
             Mul => write!(f, "{OPERATOR_MUL}"),
             Div => write!(f, "{OPERATOR_DIV}"),
-            NoOperator => write!(f, "{NONE_DISPLAY}"),
         }
     }
 }
@@ -97,15 +95,13 @@ enum BooleanOperator {
     And,
     Or,
     XOr,
-    Not,
-    NoBooleanOperator
+    Not
 }
 
 #[derive(Eq, PartialEq, Copy, Clone)]
 enum Comparator {
     Equals,
-    LessThan,
-    NoComparator
+    LessThan
 }
 
 #[derive(PartialEq, Copy, Clone)]
