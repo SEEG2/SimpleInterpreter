@@ -1,17 +1,14 @@
-use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::env::var;
-use std::fmt::{Display, Formatter, Pointer};
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use crate::FormulaElement::{ClosingBracket, Number, NumericOperator};
 use crate::keyword::*;
 use crate::Operator::{Add, Div, Mul, NoOperator, Sub};
 
 mod keyword;
-
-
 /* TODO:
          - Add conditions
          - Add pre-processor
@@ -20,7 +17,7 @@ mod keyword;
          - Improve performance
          - Add comments
  */
-const PROGRAM: &str = "var int a ~-1--1-1.0*-1*(-1.000000000*-1)*-1+((-0-0)+-0)+-(0+0);shout $a";
+const PROGRAM: &str = "var int b -1;var float a #-1--1-1.0*-1*(-1.000000000*-1)*-1+((-0-0)+-0)+-(0+0)--$b;shout $a";
 static mut INSTRUCTION_POINTER: isize = 0;
 static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -172,16 +169,13 @@ fn interpret_instruction(instruction: &str, context_raw: &str) -> Option<String>
     match instruction {
         INSTR_SHOUT => instr_shout(context_raw),
         _ => {
-            let result = prepare_context(context_raw);
-            if result.1.is_some() {
-                return result.1;
-            }
+            let prepared_context = prepare_context(context_raw).ok()?;
 
             return match instruction {
-                INSTR_TERMINATE => instr_terminate(result.0),
-                INSTR_FLAG => instr_flag(result.0),
-                INSTR_JUMP => instr_jump(result.0),
-                INSTR_VAR => instr_var(result.0),
+                INSTR_TERMINATE => instr_terminate(prepared_context),
+                INSTR_FLAG => instr_flag(prepared_context),
+                INSTR_JUMP => instr_jump(prepared_context),
+                INSTR_VAR => instr_var(prepared_context),
                 _ => Some(format!("Instruction not found \"{}\"", instruction))
             }
         }
@@ -349,26 +343,20 @@ fn instr_var_sub_insert(name: &str, value: VarValue) {
     })
 }
 
-fn resolve_variable(key: &str) -> (VarValue, Option<String>) {
+fn resolve_variable(key: &str) -> Result<VarValue, String> {
     VAR_MAP.with(|map| {
         match map.borrow().get(key) {
-            Some(v) => (v.clone(), None),
-            None => (VarValue::Bool(false), Some(format!("No variable names \"{key}\" exists")))
+            Some(v) => Ok(v.clone()),
+            None => Err(format!("No variable names \"{key}\" exists"))
         }
     })
 }
 
-fn resolve_variable_to_f32(key: &str) -> (f32, Option<String>) {
-    let result = resolve_variable(key);
-
-    match result.1  {
-        Some(a) => return (0_f32, Some(a)),
-        None => {},
-    }
-
-    match result.0.to_string().parse::<f32>() {
-        Ok(f) => (f, None),
-        Err(_) => (0_f32, Some(format!("Failed to parse variable \"{key}\" of type {} to a numeric value", result.0.type_to_string())))
+fn resolve_variable_to_f32(key: &str) -> Result<f32, String> {
+    let v = resolve_variable(key)?;
+    match v.to_string().parse::<f32>() {
+        Ok(f) => Ok(f),
+        Err(_) => Err(format!("Failed to parse variable \"{key}\" of type {} to a numeric value", v.type_to_string()))
     }
 }
 
@@ -380,7 +368,7 @@ fn create_wrong_args_count_error(expected: usize, given: usize) -> String {
     }
 }
 
-fn resolve_formula_to_float(formula: &str) -> (f32, Option<String>) {
+fn resolve_formula_to_float(formula: &str) -> Result<f32, String> {
     let mut is_reading_variable = false;
     let mut is_variable_end_reached = false;
     let mut current_variable = String::new();
@@ -424,7 +412,7 @@ fn resolve_formula_to_float(formula: &str) -> (f32, Option<String>) {
         } else if let Some(op) = char_to_operator(c) {
             if is_unary_possible_next && op == Sub {
                 if is_unary_minus_set {
-                    return (0_f32, Some(format!("Double unary at position {i} in formula")))
+                    return Err(format!("Double unary at position {i} in formula"))
                 }
                 is_unary_minus_set = true;
                 continue;
@@ -452,7 +440,7 @@ fn resolve_formula_to_float(formula: &str) -> (f32, Option<String>) {
                         }
                     },
                     Err(_) => {
-                        return (0_f32, Some(format!("Cannot resolve number \"{current_number}\" in formula")))
+                        return Err(format!("Cannot resolve number \"{current_number}\" in formula"))
                     }
                 } ;
 
@@ -467,19 +455,13 @@ fn resolve_formula_to_float(formula: &str) -> (f32, Option<String>) {
             is_unary_possible_next = false;
         } else if is_reading_variable {
             if is_variable_end_reached {
-                let var_res = resolve_variable_to_f32(current_variable.as_str());
-                match var_res.1 {
-                    Some(r) =>  {
-                        return (0_f32, Some(r))
-                    },
-                    None => {
-                        if is_unary_minus_set == true {
-                            parsed_formula.push(FormulaElement::Number(-var_res.0))
-                        } else {
-                            parsed_formula.push(FormulaElement::Number(var_res.0))
-                        }
-                    }
-                } ;
+                let var_value = resolve_variable_to_f32(current_variable.as_str())?;
+
+                if is_unary_minus_set == true {
+                    parsed_formula.push(FormulaElement::Number(-var_value))
+                } else {
+                    parsed_formula.push(FormulaElement::Number(var_value))
+                }
 
                 current_variable = String::new();
 
@@ -500,7 +482,7 @@ fn resolve_formula_to_float(formula: &str) -> (f32, Option<String>) {
 
             is_unary_possible_next = false;
         } else {
-            return (0_f32, Some(format!("Invalid char '{c}' at position {i} in formula")))
+            return Err(format!("Invalid char '{c}' at position {i} in formula"))
         }
     }
 
@@ -518,38 +500,28 @@ fn resolve_formula_to_float(formula: &str) -> (f32, Option<String>) {
                 }
             },
             Err(_) => {
-                return (0_f32, Some(format!("Cannot resolve number \"{current_number}\" in formula")))
+                return Err(format!("Cannot resolve number \"{current_number}\" in formula"))
             }
         } ;
     } else if is_reading_variable {
-        let var_res = resolve_variable_to_f32(current_variable.as_str());
-        match var_res.1 {
-            Some(r) =>  {
-                return (0_f32, Some(r))
-            },
-            None => {
-                if is_unary_minus_set == true {
-                    parsed_formula.push(FormulaElement::Number(-var_res.0))
-                } else {
-                    parsed_formula.push(FormulaElement::Number(var_res.0))
-                }
-            }
-        } ;
+        let var_value = resolve_variable_to_f32(current_variable.as_str())?;
+
+        if is_unary_minus_set == true {
+            parsed_formula.push(FormulaElement::Number(-var_value))
+        } else {
+            parsed_formula.push(FormulaElement::Number(var_value))
+        }
     }
 
-    let result = solve_formula_to_float(&mut parsed_formula, true);
-    match result.1  {
-        Some(r) => (0_f32, Some(r)),
-        None => (result.0, None)
-    }
+    solve_formula_to_float(&mut parsed_formula, true)
 }
 
-fn solve_formula_to_float(formula: &mut Vec<FormulaElement>, scan_for_subformula: bool) -> (f32, Option<String>) {
+fn solve_formula_to_float(formula: &mut Vec<FormulaElement>, scan_for_subformula: bool) -> Result<f32, String> {
     if formula.is_empty() {
         if scan_for_subformula {
-            return (0_f32, Some("Formula is empty".to_string()))
+            return Err("Formula is empty".to_string())
         }
-        return (0_f32, Some("Formula contains empty bracket enclosure".to_string()))
+        return Err("Formula contains empty bracket enclosure".to_string())
     }
 
     if scan_for_subformula {
@@ -562,24 +534,24 @@ fn solve_formula_to_float(formula: &mut Vec<FormulaElement>, scan_for_subformula
                     is_bracket_open = true;
                 } else if *e == FormulaElement::ClosingBracket {
                     if !is_bracket_open {
-                        return (0_f32, Some("Closing bracket without matching opening bracket".to_string()))
+                        return Err("Closing bracket without matching opening bracket".to_string())
                     }
 
                     let mut sub_formula = formula.drain(bracket_start_index+1..i).collect();
 
-                    let result = solve_formula_to_float(&mut sub_formula, false);
-                    if result.1.is_some() {
-                        return result;
+                    match solve_formula_to_float(&mut sub_formula, false) {
+                        Ok(v) => {
+                            formula[bracket_start_index] = FormulaElement::Number(v);
+                            formula.remove(bracket_start_index+1);
+                            continue 'outer;
+                        },
+                        Err(e) => return Err(e)
                     }
-
-                    formula[bracket_start_index] = FormulaElement::Number(result.0);
-                    formula.remove(bracket_start_index+1);
-                    continue 'outer;
                 }
             }
 
             if is_bracket_open {
-                return (0_f32, Some("Opening bracket without matching closing bracket".to_string()))
+                return Err("Opening bracket without matching closing bracket".to_string())
             }
 
             break;
@@ -590,11 +562,11 @@ fn solve_formula_to_float(formula: &mut Vec<FormulaElement>, scan_for_subformula
         for (i, e) in formula.iter().enumerate() {
             if let NumericOperator(operator @ (Mul | Div)) = *e {
                 let Number(lhs) = formula[i-1] else {
-                    return (0_f32, Some(format!("Expected a number left of operator '{operator}', but found '{}'", formula[i-1])));
+                    return Err(format!("Expected a number left of operator '{operator}', but found '{}'", formula[i-1]));
                 };
 
                 let Number(rhs) = formula[i+1] else {
-                    return (0_f32, Some(format!("Expected a number right of operator '{operator}', but found '{}'", formula[i+1])));
+                    return Err(format!("Expected a number right of operator '{operator}', but found '{}'", formula[i+1]));
                 };
 
                 formula[i] = Number(apply_operation_float(lhs, rhs, operator));
@@ -611,11 +583,11 @@ fn solve_formula_to_float(formula: &mut Vec<FormulaElement>, scan_for_subformula
         for (i, e) in formula.iter().enumerate() {
             if let NumericOperator(operator @ (Add | Sub)) = *e {
                 let Number(lhs) = formula[i-1] else {
-                    return (0_f32, Some(format!("Expected a number left of operator '{operator}', but found '{}'", formula[i-1])));
+                    return Err(format!("Expected a number left of operator '{operator}', but found '{}'", formula[i-1]));
                 };
 
                 let Number(rhs) = formula[i+1] else {
-                    return (0_f32, Some(format!("Expected a number right of operator '{operator}', but found '{}'", formula[i+1])));
+                    return Err(format!("Expected a number right of operator '{operator}', but found '{}'", formula[i+1]));
                 };
 
                 formula[i] = Number(apply_operation_float(lhs, rhs, operator));
@@ -630,22 +602,22 @@ fn solve_formula_to_float(formula: &mut Vec<FormulaElement>, scan_for_subformula
 
     if formula.len() != 1 {
         if scan_for_subformula {
-            return (0_f32, Some("Formula could not be resolved".to_string()))
+            return Err("Formula could not be resolved".to_string())
         }
-        return (0_f32, Some("Sub-formula could not be resolved".to_string()))
+        return Err("Sub-formula could not be resolved".to_string())
     };
 
     let Number(final_value) = formula[0] else {
         if scan_for_subformula {
-            return (0_f32, Some("Formula could not be resolved".to_string()))
+            return Err("Formula could not be resolved".to_string())
         }
-        return (0_f32, Some("Sub-formula could not be resolved".to_string()))
+        return Err("Sub-formula could not be resolved".to_string())
     };
 
-    (final_value, None)
+    Ok(final_value)
 }
 
-fn prepare_context(context: &str) -> (Vec<String>, Option<String>) {
+fn prepare_context(context: &str) -> Result<Vec<String>, String> {
     let mut arguments= Vec::new();
     let mut is_string_literal_open = false;
     let mut current_arg = String::new();
@@ -679,7 +651,7 @@ fn prepare_context(context: &str) -> (Vec<String>, Option<String>) {
     }
 
     if is_string_literal_open {
-        return (Vec::new(), Some("String literal was opened but never closed".to_string()))
+        return Err("String literal was opened but never closed".to_string())
     }
 
     if !is_string_literal_open && !current_arg.is_empty() {
@@ -689,14 +661,14 @@ fn prepare_context(context: &str) -> (Vec<String>, Option<String>) {
     let mut i = 0;
     while i < arguments.len()  {
         match prepare_argument(&mut arguments[i]) {
-            Some(s) => return (Vec::new(), Some(s)),
+            Some(s) => return Err(s),
             None => {}
         }
 
         i+=1;
     }
 
-   (arguments, None)
+   Ok(arguments)
 }
 
 fn prepare_argument(argument: &mut String) -> Option<String> {
@@ -710,32 +682,14 @@ fn prepare_argument(argument: &mut String) -> Option<String> {
         *argument = chars.as_str().to_string();
         return None;
     } else if ch == IND_RESOLVE_VARIABLE {
-        let r = resolve_variable(chars.as_str());
-        return match r.1 {
-            Some(s) => Some(s),
-            None => {
-                *argument = r.0.to_string();
-                None
-            }
-        }
+        let var_value = resolve_variable(chars.as_str()).ok()?;
+        *argument = var_value.to_string();
     } else if ch == IND_FORMULA_FLOAT {
-        let r = resolve_formula_to_float(chars.as_str());
-        return match r.1 {
-            Some(s) => Some(s),
-            None => {
-                *argument = r.0.to_string();
-                None
-            }
-        }
+        let number_value = resolve_formula_to_float(chars.as_str()).ok()?;
+        *argument = number_value.to_string();
     } else if ch == IND_FORMULA_ROUNDED {
-        let r = resolve_formula_to_float(chars.as_str());
-        return  match r.1 {
-            Some(s) => return Some(s),
-            None => {
-                *argument = (r.0.round() as i32).to_string();
-                None
-            }
-        }
+        let number_value = resolve_formula_to_float(chars.as_str()).ok()?;
+        *argument = (number_value.round() as i32).to_string();
     }
 
     None
