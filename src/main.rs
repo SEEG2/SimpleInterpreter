@@ -17,7 +17,7 @@ mod keyword;
          - Improve performance
          - Add comments
  */
-const PROGRAM: &str = "var int b -1;var float a #-1--1-1.0*-1*(-1.000000000*-1)*-1+((-0-0)+-0)+-(0+0)--$b;shout $a";
+const PROGRAM: &str = "flag 100;var float a 42;var float b 0;flag A;flag $b;var int b ~$b+1;var float a #$a/1.1;shout $a;shout \n;jump A";
 static mut INSTRUCTION_POINTER: isize = 0;
 static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -165,7 +165,10 @@ fn interpret_instruction(instruction: &str, context_raw: &str) -> Option<String>
     match instruction {
         INSTR_SHOUT => instr_shout(context_raw),
         _ => {
-            let prepared_context = prepare_context(context_raw).ok()?;
+            let prepared_context = match prepare_context(context_raw) {
+                Ok(v) => v,
+                Err(e) => return Some(e)
+            };
 
             return match instruction {
                 INSTR_TERMINATE => instr_terminate(prepared_context),
@@ -193,9 +196,7 @@ fn instr_terminate(context_raw: Vec<String>) -> Option<String> {
 
     exit_code = match argument.parse::<u8>() {
         Ok(code) => code,
-        Err(_) => {
-            return Some(format!("Invalid termination code {}", argument));
-        }
+        Err(_) => return Some(format!("Invalid termination code {}", argument))
     };
 
     if exit_code == 2 {
@@ -678,13 +679,22 @@ fn prepare_argument(argument: &mut String) -> Option<String> {
         *argument = chars.as_str().to_string();
         return None;
     } else if ch == IND_RESOLVE_VARIABLE {
-        let var_value = resolve_variable(chars.as_str()).ok()?;
+        let var_value = match resolve_variable(chars.as_str()) {
+            Ok(v) => v,
+            Err(e) => return Some(e)
+        };
         *argument = var_value.to_string();
     } else if ch == IND_FORMULA_FLOAT {
-        let number_value = resolve_formula_to_float(chars.as_str()).ok()?;
+        let number_value = match resolve_formula_to_float(chars.as_str()) {
+            Ok(v) => v,
+            Err(e) => return Some(e)
+        };
         *argument = number_value.to_string();
     } else if ch == IND_FORMULA_ROUNDED {
-        let number_value = resolve_formula_to_float(chars.as_str()).ok()?;
+        let number_value = match resolve_formula_to_float(chars.as_str()) {
+            Ok(v) => v,
+            Err(e) => return Some(e)
+        };
         *argument = (number_value.round() as i32).to_string();
     }
 
