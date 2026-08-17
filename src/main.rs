@@ -1,12 +1,12 @@
+use crate::keyword::*;
+use crate::Comparator::{Equals, GreaterThan};
+use crate::FormulaElement::{ClosingBracket, Number, NumericOperator};
+use crate::Operator::{Add, Div, Mul, Sub};
 use std::cell::RefCell;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::env::var;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use crate::FormulaElement::{ClosingBracket, Number, NumericOperator};
-use crate::keyword::*;
-use crate::Operator::{Add, Div, Mul, Sub};
 
 mod keyword;
 /* TODO:
@@ -17,7 +17,7 @@ mod keyword;
          - Improve performance
          - Add comments
  */
-const PROGRAM: &str = "flag 100;var float a 42;var float b 0;flag A;flag $b;var int b ~$b+1;var float a #$a/1.1;shout $a;shout \n;jump A";
+const PROGRAM: &str = "var float a 42.24;var int b -14;shout ?$a>$b;shout \n;shout ?$a<$b;shout \n;shout ?$a=$b;shout \n;shout ?$b>$a;shout \n;shout ?$b<$a;shout \n;shout ?$b=$a;shout \n";
 static mut INSTRUCTION_POINTER: isize = 0;
 static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -101,7 +101,8 @@ enum BooleanOperator {
 #[derive(Eq, PartialEq, Copy, Clone)]
 enum Comparator {
     Equals,
-    LessThan
+    LessThan,
+    GreaterThan
 }
 
 #[derive(PartialEq, Copy, Clone)]
@@ -668,6 +669,97 @@ fn prepare_context(context: &str) -> Result<Vec<String>, String> {
    Ok(arguments)
 }
 
+// TODO: integrate formulas and consider String comparisons
+fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
+    let mut lhs = String::new();
+    let mut rhs = String::new();
+    let mut is_lhs_var = false;
+    let mut is_rhs_var = false;
+    let mut comparator = None;
+
+    for c in comparison.chars()  {
+        if c == IND_RESOLVE_VARIABLE {
+            if lhs.is_empty() {
+                if is_lhs_var {
+                    return Err("Double variable resolve char".to_string());
+                }
+                is_lhs_var = true;
+                continue
+            } else if rhs.is_empty() && !comparator.is_none()  {
+                if is_rhs_var {
+                    return Err("Double variable resolve char".to_string());
+                }
+                is_rhs_var = true;
+                continue
+            } else {
+                return Err(format!("Invalid position for char '{c}'"))
+            }
+        } else if let Some(v) = char_to_comparator(c) &&!lhs.is_empty() && comparator.is_none() {
+            comparator = Some(v);
+        } else {
+            if comparator.is_none() {
+                lhs.push(c)
+            } else {
+                rhs.push(c)
+            }
+        }
+    }
+
+    if lhs.is_empty() {
+        return Err("Left hand side of comparison is empty".to_string())
+    }
+
+    if rhs.is_empty() {
+        return Err("Right hand side of comparison is empty".to_string())
+    }
+
+    let Some(comparator) = comparator else {
+        return Err("No valid comparator provided".to_string())
+    };
+
+    if is_lhs_var {
+        lhs = resolve_variable(lhs.as_str())?.to_string()
+    }
+
+    if is_rhs_var {
+        rhs = resolve_variable(rhs.as_str())?.to_string()
+    }
+
+    if let Ok(v1) = lhs.parse::<i32>() && let Ok(v2) = rhs.parse::<i32>() {
+        return match comparator {
+            Equals => Ok(v1 == v2),
+            GreaterThan => Ok(v1 > v2),
+            Comparator::LessThan => Ok(v1 < v2)
+        }
+    }
+
+    if let Ok(v1) = lhs.parse::<i32>() && let Ok(v2) = rhs.parse::<f32>() {
+        return match comparator {
+            Equals => Ok(v1 as f32 == v2),
+            GreaterThan => Ok(v1 as f32 > v2),
+            Comparator::LessThan => Ok((v1 as f32) < v2)
+        }
+    }
+
+    if let Ok(v1) = lhs.parse::<f32>() && let Ok(v2) = rhs.parse::<i32>() {
+        return match comparator {
+            Equals => Ok(v1 == v2 as f32),
+            GreaterThan => Ok(v1 > v2 as f32),
+            Comparator::LessThan => Ok(v1< v2 as f32)
+        }
+    }
+
+    if let Ok(v1) = lhs.parse::<f32>() && let Ok(v2) = rhs.parse::<f32>() {
+        return match comparator {
+            Equals => Ok(v1 == v2),
+            GreaterThan => Ok(v1 > v2),
+            Comparator::LessThan => Ok(v1< v2)
+        }
+    }
+
+    Err(format!("The types of \"{lhs}\" and \"{rhs}\" do not match or are invalid"))
+}
+
 fn prepare_argument(argument: &mut String) -> Option<String> {
     assert!(!argument.is_empty());
 
@@ -696,6 +788,12 @@ fn prepare_argument(argument: &mut String) -> Option<String> {
             Err(e) => return Some(e)
         };
         *argument = (number_value.round() as i32).to_string();
+    } else if ch == IND_BOOL_COMPARISON {
+        let value = match resolve_boolean_comparison(chars.as_str()) {
+            Ok(v) => v,
+            Err(e) => return Some(e)
+        };
+        *argument = value.to_string();
     }
 
     None
@@ -705,6 +803,7 @@ fn char_to_comparator(c: char) -> Option<Comparator> {
     Some(match c {
         BOOL_COMPARATOR_EQUAL => Comparator::Equals,
         BOOL_COMPARATOR_LESS_THAN => Comparator::LessThan,
+        BOOL_COMPARATOR_GREATER_THAN => Comparator::GreaterThan,
         _ => return None
     })
 }
@@ -729,12 +828,11 @@ fn char_to_operator(c: char) -> Option<Operator> {
     })
 }
 
-fn apply_operation_float(operand1: f32, operand2: f32, operator: Operator) -> f32 {
+fn apply_operation_float(lhs: f32, rhs: f32, operator: Operator) -> f32 {
     match operator  {
-        Add => operand1+operand2,
-        Sub => operand1-operand2,
-        Mul => operand1*operand2,
-        Div => operand1/operand2,
-        _ => 0_f32,
+        Add => lhs + rhs,
+        Sub => lhs - rhs,
+        Mul => lhs * rhs,
+        Div => lhs / rhs,
     }
 }

@@ -31,9 +31,9 @@ pub const BOOL_OPERATOR_NOT: char = '!';
 
 pub const BOOL_COMPARATOR_EQUAL: char = '=';
 pub const BOOL_COMPARATOR_LESS_THAN: char = '<';
+pub const BOOL_COMPARATOR_GREATER_THAN: char = '>';
 
-pub const BOOL_TRUE: char = 't';
-pub const BOOL_FALSE: char = 'f';
+pub const IND_BOOL_COMPARISON: char = '?';
 
 pub const NONE_DISPLAY: char = '\0';
 pub const ARGUMENT_SEPARATOR: char = ' ';
