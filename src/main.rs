@@ -17,7 +17,7 @@ mod keyword;
          - Improve performance
          - Add comments
  */
-const PROGRAM: &str = "var float a 42.24;var int b -14;shout ?$a>$b;shout \n;shout ?$a<$b;shout \n;shout ?$a=$b;shout \n;shout ?$b>$a;shout \n;shout ?$b<$a;shout \n;shout ?$b=$a;shout \n";
+const PROGRAM: &str = "var int a 42;var int b 2;shout ?~($a-40.2)=$b";
 static mut INSTRUCTION_POINTER: isize = 0;
 static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -669,16 +669,24 @@ fn prepare_context(context: &str) -> Result<Vec<String>, String> {
    Ok(arguments)
 }
 
-// TODO: integrate formulas and consider String comparisons
+// TODO: Consider String comparisons
 fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
     let mut lhs = String::new();
     let mut rhs = String::new();
+
     let mut is_lhs_var = false;
     let mut is_rhs_var = false;
+
+    let mut is_lhs_formula = false;
+    let mut is_rhs_formula = false;
+    let mut is_reading_formula = false;
+    let mut is_lhs_formula_rounded = false;
+    let mut is_rhs_formula_rounded = false;
+
     let mut comparator = None;
 
     for c in comparison.chars()  {
-        if c == IND_RESOLVE_VARIABLE {
+        if c == IND_RESOLVE_VARIABLE && !is_reading_formula {
             if lhs.is_empty() {
                 if is_lhs_var {
                     return Err("Double variable resolve char".to_string());
@@ -694,8 +702,33 @@ fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
             } else {
                 return Err(format!("Invalid position for char '{c}'"))
             }
-        } else if let Some(v) = char_to_comparator(c) &&!lhs.is_empty() && comparator.is_none() {
+        } else if c == IND_FORMULA_FLOAT || c == IND_FORMULA_ROUNDED {
+            if is_reading_formula {
+                return Err("Double formula resolve char".to_string());
+            }
+
+            if lhs.is_empty() {
+                if is_lhs_formula {
+                    return Err("Double variable resolve char".to_string());
+                }
+                is_lhs_formula = true;
+                is_reading_formula = true;
+                is_lhs_formula_rounded = c == IND_FORMULA_ROUNDED;
+                continue
+            } else if rhs.is_empty() && !comparator.is_none()  {
+                if is_rhs_formula {
+                    return Err("Double variable resolve char".to_string());
+                }
+                is_rhs_formula = true;
+                is_reading_formula = true;
+                is_rhs_formula_rounded = c == IND_FORMULA_ROUNDED;
+                continue
+            } else {
+                return Err(format!("Invalid position for char '{c}'"))
+            }
+        }  else if let Some(v) = char_to_comparator(c) &&!lhs.is_empty() && comparator.is_none() {
             comparator = Some(v);
+            is_reading_formula = false;
         } else {
             if comparator.is_none() {
                 lhs.push(c)
@@ -719,10 +752,22 @@ fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
 
     if is_lhs_var {
         lhs = resolve_variable(lhs.as_str())?.to_string()
+    } else if is_lhs_formula {
+        if is_lhs_formula_rounded {
+            lhs = resolve_formula_to_float(lhs.as_str())?.round().to_string()
+        } else {
+            lhs = resolve_formula_to_float(lhs.as_str())?.to_string()
+        }
     }
 
     if is_rhs_var {
         rhs = resolve_variable(rhs.as_str())?.to_string()
+    } else if is_lhs_formula {
+        if is_rhs_formula_rounded {
+            rhs = resolve_formula_to_float(rhs.as_str())?.round().to_string()
+        } else {
+            rhs = resolve_formula_to_float(rhs.as_str())?.to_string()
+        }
     }
 
     if let Ok(v1) = lhs.parse::<i32>() && let Ok(v2) = rhs.parse::<i32>() {
