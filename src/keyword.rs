@@ -3,6 +3,7 @@ pub const INSTR_JUMP: &str = "jump";
 pub const INSTR_FLAG: &str = "flag";
 pub const INSTR_SHOUT: &str = "shout";
 pub const INSTR_VAR: &str = "var";
+pub const INSTR_IFDO: &str = "ifdo";
 
 pub const IND_RESOLVE_VARIABLE: char = '$';
 pub const IND_STRING_IGNORE: char = '%';
@@ -35,7 +36,6 @@ pub const BOOL_COMPARATOR_GREATER_THAN: char = '>';
 
 pub const IND_BOOL_COMPARISON: char = '?';
 
-pub const NONE_DISPLAY: char = '\0';
 pub const ARGUMENT_SEPARATOR: char = ' ';
 pub const STR_LITERAL_INDICATOR: char = '"';
 pub const VARIABLE_NAME_CHARS: &[char] = &['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',

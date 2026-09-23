@@ -17,7 +17,7 @@ mod keyword;
          - Improve performance
          - Add comments
  */
-const PROGRAM: &str = "var int a 42;var int b 2;shout ?~($a-40.2)=$b";
+const PROGRAM: &str = "flag a;var int a 42;var int b 2;ifdo ?~($a-40.2)=$b ifdo ?~($a-40.2)=$b shout yes;ifdo ?1=1 jump a";
 static mut INSTRUCTION_POINTER: isize = 0;
 static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -130,10 +130,10 @@ fn main() {
         while INSTRUCTION_POINTER >= 0 && INSTRUCTION_POINTER.cast_unsigned() < operations.len() {
             INSTRUCTION_COUNTER += 1;
             let operation = *operations.get(INSTRUCTION_POINTER.cast_unsigned()).unwrap();
-            let mut operation_and_context = operation.splitn(2, ARGUMENT_SEPARATOR);
+            let mut operation_and_context = operation.split_once(ARGUMENT_SEPARATOR).unwrap_or((operation,""));
             let last_instr_pointer = INSTRUCTION_POINTER;
             INSTRUCTION_POINTER += 1;
-            let error_details = interpret_instruction(operation_and_context.next().unwrap(), operation_and_context.next().unwrap_or(""));
+            let error_details = interpret_instruction(operation_and_context.0, operation_and_context.1);
             if error_details.is_some() {
                 INSTRUCTION_POINTER = -2;
                 let local_instruction_counter = INSTRUCTION_COUNTER;
@@ -165,6 +165,7 @@ fn main() {
 fn interpret_instruction(instruction: &str, context_raw: &str) -> Option<String> {
     match instruction {
         INSTR_SHOUT => instr_shout(context_raw),
+        INSTR_IFDO => instr_ifdo(context_raw),
         _ => {
             let prepared_context = match prepare_context(context_raw) {
                 Ok(v) => v,
@@ -187,7 +188,6 @@ fn instr_terminate(context_raw: Vec<String>) -> Option<String> {
         Some(arg) => (*arg).to_string(),
         None => return Some("Termination code argument is missing".to_string()),
     };
-
 
     if context_raw.len() > 1 {
         return Some(create_wrong_args_count_error(1, context_raw.len()))
@@ -345,7 +345,7 @@ fn resolve_variable(key: &str) -> Result<VarValue, String> {
     VAR_MAP.with(|map| {
         match map.borrow().get(key) {
             Some(v) => Ok(v.clone()),
-            None => Err(format!("No variable names \"{key}\" exists"))
+            None => Err(format!("No variable named \"{key}\" exists"))
         }
     })
 }
@@ -739,10 +739,22 @@ fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
     }
 
     if lhs.is_empty() {
+        if is_lhs_var {
+            return Err("Left hand side is an empty variable".to_string())
+        }
+        if is_lhs_formula || is_lhs_formula_rounded {
+            return Err("Left hand side is an empty formula".to_string())
+        }
         return Err("Left hand side of comparison is empty".to_string())
     }
 
     if rhs.is_empty() {
+        if is_rhs_var {
+            return Err("Right hand side is an empty variable".to_string())
+        }
+        if is_rhs_formula || is_rhs_formula_rounded {
+            return Err("Right hand side is an empty formula".to_string())
+        }
         return Err("Right hand side of comparison is empty".to_string())
     }
 
@@ -803,6 +815,65 @@ fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
     }
 
     Err(format!("The types of \"{lhs}\" and \"{rhs}\" do not match or are invalid"))
+}
+
+fn instr_ifdo(raw_context: &str) -> Option<String> {
+
+    let mut as_chars = raw_context.chars();
+
+    let first_char = match as_chars.next() {
+        Some(c) => c,
+        None => return Some("Expected condition and instruction".to_string())
+    };
+
+    if first_char  != IND_BOOL_COMPARISON {
+        return Some(format!("First position is {first_char} but should be boolean comparison char"))
+    }
+
+    let mut comparison_string = String::new();
+    let mut has_reached_first_separator = false;
+    let mut instruction_string = String::new();
+
+    for c in as_chars {
+        if c == ARGUMENT_SEPARATOR  {
+            if comparison_string.is_empty() {
+                return Some("Comparison must not be empty".to_string())
+            }
+            if has_reached_first_separator && instruction_string.is_empty() {
+                return Some("Double separator between comparison and instruction".to_string())
+            }
+            if has_reached_first_separator {
+                instruction_string.push(c);
+                continue;
+            }
+            has_reached_first_separator = true;
+        } else {
+            if !has_reached_first_separator {
+                comparison_string.push(c);
+            } else {
+                instruction_string.push(c);
+            }
+        }
+    }
+
+    if comparison_string.is_empty() {
+        return Some("Comparison is empty".to_string())
+    }
+    if instruction_string.is_empty() {
+        return Some("Instruction is empty".to_string())
+    }
+
+    let result = match resolve_boolean_comparison(comparison_string.as_str()) {
+        Ok(b) => b,
+        Err(s) => return Some(s)
+    };
+
+    if result {
+        let instruction_split = instruction_string.split_once(" ").unwrap_or((&instruction_string, ""));
+        return interpret_instruction(instruction_split.0, instruction_split.1)
+    }
+
+    None
 }
 
 fn prepare_argument(argument: &mut String) -> Option<String> {
