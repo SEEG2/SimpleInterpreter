@@ -1,11 +1,11 @@
-use crate::keyword::*;
 use crate::Comparator::{Equals, GreaterThan};
 use crate::FormulaElement::{ClosingBracket, Number, NumericOperator};
 use crate::Operator::{Add, Div, Mul, Sub};
+use crate::keyword::*;
 use std::cell::RefCell;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::fmt::{format, Display, Formatter};
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 mod keyword;
@@ -17,7 +17,7 @@ mod keyword;
          - Improve performance
          - Add comments
  */
-const PROGRAM: &str = "flag a;var int a 42;var int b 2;ifdo ?~($a-40.2)=$b ifdo ?~($a-40.2)=$b shout yes;var bool c ?~($a-40.2)=$b;ifdo $c jump a";
+const PROGRAM: &str = "nop;flag a;var int a 42;var int b 2;ifdo ?~($a-40.2)=$b ifdo ?~($a-40.2)=$b shout yes;nop;var bool c ?~($a-40.2)=$b;ifdo $c jump a;nop";
 static mut INSTRUCTION_POINTER: isize = 0;
 static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -130,7 +130,7 @@ fn main() {
         while INSTRUCTION_POINTER >= 0 && INSTRUCTION_POINTER.cast_unsigned() < operations.len() {
             INSTRUCTION_COUNTER += 1;
             let operation = *operations.get(INSTRUCTION_POINTER.cast_unsigned()).unwrap();
-            let mut operation_and_context = operation.split_once(ARGUMENT_SEPARATOR).unwrap_or((operation,""));
+            let operation_and_context = operation.split_once(ARGUMENT_SEPARATOR).unwrap_or((operation,""));
             let last_instr_pointer = INSTRUCTION_POINTER;
             INSTRUCTION_POINTER += 1;
             let error_details = interpret_instruction(operation_and_context.0, operation_and_context.1);
@@ -166,6 +166,7 @@ fn interpret_instruction(instruction: &str, context_raw: &str) -> Option<String>
     match instruction {
         INSTR_SHOUT => instr_shout(context_raw),
         INSTR_IFDO => instr_ifdo(context_raw),
+        INSTR_NOP => None,
         _ => {
             let prepared_context = match prepare_context(context_raw) {
                 Ok(v) => v,

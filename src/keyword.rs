@@ -4,6 +4,7 @@ pub const INSTR_FLAG: &str = "flag";
 pub const INSTR_SHOUT: &str = "shout";
 pub const INSTR_VAR: &str = "var";
 pub const INSTR_IFDO: &str = "ifdo";
+pub const INSTR_NOP: &str = "nop";
 
 pub const IND_RESOLVE_VARIABLE: char = '$';
 pub const IND_STRING_IGNORE: char = '%';
