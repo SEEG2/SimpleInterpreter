@@ -5,7 +5,7 @@ use crate::Operator::{Add, Div, Mul, Sub};
 use std::cell::RefCell;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::{format, Display, Formatter};
 use std::str::FromStr;
 
 mod keyword;
@@ -17,7 +17,7 @@ mod keyword;
          - Improve performance
          - Add comments
  */
-const PROGRAM: &str = "flag a;var int a 42;var int b 2;ifdo ?~($a-40.2)=$b ifdo ?~($a-40.2)=$b shout yes;ifdo ?1=1 jump a";
+const PROGRAM: &str = "flag a;var int a 42;var int b 2;ifdo ?~($a-40.2)=$b ifdo ?~($a-40.2)=$b shout yes;var bool c ?~($a-40.2)=$b;ifdo $c jump a";
 static mut INSTRUCTION_POINTER: isize = 0;
 static mut INSTRUCTION_COUNTER: isize = 0;
 
@@ -818,6 +818,11 @@ fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
 }
 
 fn instr_ifdo(raw_context: &str) -> Option<String> {
+    enum IfdoConditionType {
+        Comparison,
+        Variable,
+        Raw
+    }
 
     let mut as_chars = raw_context.chars();
 
@@ -826,21 +831,28 @@ fn instr_ifdo(raw_context: &str) -> Option<String> {
         None => return Some("Expected condition and instruction".to_string())
     };
 
-    if first_char  != IND_BOOL_COMPARISON {
-        return Some(format!("First position is {first_char} but should be boolean comparison char"))
+    let mut condition_string = String::new();
+
+    let condition_type;
+    if first_char == IND_BOOL_COMPARISON {
+        condition_type = IfdoConditionType::Comparison;
+    } else if first_char == IND_RESOLVE_VARIABLE {
+        condition_type = IfdoConditionType::Variable;
+    } else {
+        condition_string.push(first_char);
+        condition_type = IfdoConditionType::Raw;
     }
 
-    let mut comparison_string = String::new();
     let mut has_reached_first_separator = false;
     let mut instruction_string = String::new();
 
     for c in as_chars {
         if c == ARGUMENT_SEPARATOR  {
-            if comparison_string.is_empty() {
-                return Some("Comparison must not be empty".to_string())
+            if condition_string.is_empty() {
+                return Some("Condition must not be empty".to_string())
             }
             if has_reached_first_separator && instruction_string.is_empty() {
-                return Some("Double separator between comparison and instruction".to_string())
+                return Some("Double separator between condition and instruction".to_string())
             }
             if has_reached_first_separator {
                 instruction_string.push(c);
@@ -849,24 +861,50 @@ fn instr_ifdo(raw_context: &str) -> Option<String> {
             has_reached_first_separator = true;
         } else {
             if !has_reached_first_separator {
-                comparison_string.push(c);
+                condition_string.push(c);
             } else {
                 instruction_string.push(c);
             }
         }
     }
 
-    if comparison_string.is_empty() {
-        return Some("Comparison is empty".to_string())
+    if condition_string.is_empty() {
+        return Some("Condition must not be empty".to_string())
     }
     if instruction_string.is_empty() {
-        return Some("Instruction is empty".to_string())
+        return Some("Instruction must not be empty".to_string())
     }
 
-    let result = match resolve_boolean_comparison(comparison_string.as_str()) {
-        Ok(b) => b,
-        Err(s) => return Some(s)
-    };
+    let result;
+    match condition_type {
+        IfdoConditionType::Comparison => {
+            result = match resolve_boolean_comparison(condition_string.as_str()) {
+                Ok(b) => b,
+                Err(s) => return Some(s)
+            };
+        }
+        IfdoConditionType::Variable => {
+            let pre_result = match resolve_variable(&condition_string) {
+                Ok(v) => v,
+                Err(e) => return Some(e)
+            };
+
+            match pre_result {
+                VarValue::Bool(b) => {
+                    result = b
+                }
+                _ => {
+                    return Some(format!("Variable \"{condition_string}\" is expected to be of type bool"))
+                }
+            }
+        }
+        IfdoConditionType::Raw => {
+            result = match condition_string.parse::<bool>() {
+                Ok(b) => b,
+                Err(_) => return Some(format!("Condition is expected to be \"true\" or \"false\" but was found to be \"{condition_string}\""))
+            }
+        }
+    }
 
     if result {
         let instruction_split = instruction_string.split_once(" ").unwrap_or((&instruction_string, ""));
