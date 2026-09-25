@@ -5,31 +5,18 @@ use crate::keyword::*;
 use std::cell::RefCell;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
+use std::env::var;
+use std::fmt::{format, Display, Formatter};
 use std::str::FromStr;
 
 mod keyword;
 /* TODO:
-         - Add conditions
-         - Add pre-processor
          - Improve code quality and fix bugs
          - Improve instruction splitter
          - Improve performance
          - Add comments
  */
-const PROGRAM: &str = "nop;flag a;var int a 42;var int b 2;ifdo ?~($a-40.2)=$b ifdo ?~($a-40.2)=$b shout yes;nop;var bool c ?~($a-40.2)=$b;ifdo $c jump a;nop";
-static mut INSTRUCTION_POINTER: isize = 0;
-static mut INSTRUCTION_COUNTER: isize = 0;
-
-thread_local! {
-    static FLAG_MAP: RefCell<HashMap<String, usize>> =
-        RefCell::new(HashMap::new());
-}
-
-thread_local! {
-    static VAR_MAP: RefCell<HashMap<String, VarValue>> =
-        RefCell::new(HashMap::new());
-}
+const PROGRAM: &str = "jump a;flag b;var int a 2;flag '$a;shout a\n;jump '2;flag a;jump b";
 
 #[derive(PartialEq, Clone)]
 enum VarValue {
@@ -124,30 +111,46 @@ impl Display for FormulaElement {
     }
 }
 
-fn main() {
-    let operations: Vec<&str> = PROGRAM.split(";").collect();
-    unsafe {
-        while INSTRUCTION_POINTER >= 0 && INSTRUCTION_POINTER.cast_unsigned() < operations.len() {
-            INSTRUCTION_COUNTER += 1;
-            let operation = *operations.get(INSTRUCTION_POINTER.cast_unsigned()).unwrap();
-            let operation_and_context = operation.split_once(ARGUMENT_SEPARATOR).unwrap_or((operation,""));
-            let last_instr_pointer = INSTRUCTION_POINTER;
-            INSTRUCTION_POINTER += 1;
-            let error_details = interpret_instruction(operation_and_context.0, operation_and_context.1);
-            if error_details.is_some() {
-                INSTRUCTION_POINTER = -2;
-                let local_instruction_counter = INSTRUCTION_COUNTER;
-                println!("--- ERROR ---");
-                println!("Error Details:");
-                println!(" CALL: \"{}\" at position {} with instruction counter at {}", operation, last_instr_pointer+1, local_instruction_counter);
-                println!("   {}", error_details.unwrap());
-            }
+struct Interpreter {
+    operations: Vec<String>,
+    instruction_pointer: isize,
+    instruction_counter: isize,
+    flag_map: HashMap<String, usize>,
+    var_map: HashMap<String, VarValue>
+}
 
+impl Interpreter {
+    fn new(program: &str) -> Interpreter {
+        Self {
+            operations: program.split(";").map(String::from).collect(),
+            instruction_pointer: 0,
+            instruction_counter: 0,
+            flag_map: HashMap::new(),
+            var_map: HashMap::new()
+        }
+    }
 
+    fn run(&mut self) {
+        if let Some(v) = self.run_pre_processor() {
+            self.print_err(true, v.1, v.0);
+            return;
         }
 
-        if INSTRUCTION_POINTER.is_negative() {
-            let exit_code = (-INSTRUCTION_POINTER) - 1;
+        while self.instruction_pointer >= 0 && self.instruction_pointer.cast_unsigned() < self.operations.len() {
+            self.instruction_counter += 1;
+            let operation = self.operations.get(self.instruction_pointer.cast_unsigned()).unwrap().clone();
+            let operation_and_context = operation.split_once(ARGUMENT_SEPARATOR).unwrap_or((&*operation, ""));
+            let last_instr_pointer = self.instruction_pointer;
+            self.instruction_pointer += 1;
+            let error_details = self.interpret_instruction(operation_and_context.0, operation_and_context.1);
+            if error_details.is_some() {
+                self.instruction_pointer = -2;
+                self.print_err(false, last_instr_pointer as usize, error_details.unwrap());
+            }
+        }
+
+        if self.instruction_pointer.is_negative() {
+            let exit_code = (-self.instruction_pointer) - 1;
             if exit_code == 0 {
                 println!("Program exited successfully (Code: {})", exit_code);
                 return;
@@ -155,36 +158,121 @@ fn main() {
 
             println!("Program exited with an error (Code: {})", exit_code);
             return;
-        } else if INSTRUCTION_POINTER.cast_unsigned() >= operations.len() {
+        } else if self.instruction_pointer.cast_unsigned() >= self.operations.len() {
             println!("Program reached the end (Code: 2)");
             return;
         }
     }
-}
 
-fn interpret_instruction(instruction: &str, context_raw: &str) -> Option<String> {
-    match instruction {
-        INSTR_SHOUT => instr_shout(context_raw),
-        INSTR_IFDO => instr_ifdo(context_raw),
-        INSTR_NOP => None,
-        _ => {
-            let prepared_context = match prepare_context(context_raw) {
-                Ok(v) => v,
-                Err(e) => return Some(e)
+    fn run_pre_processor(&mut self) -> Option<(String, usize)> {
+        let mut flag_map = HashMap::new();
+
+        for (i, s) in self.operations.clone().iter().enumerate() {
+            let Some(operation) = s.split_once(ARGUMENT_SEPARATOR) else {
+                continue;
             };
 
-            return match instruction {
-                INSTR_TERMINATE => instr_terminate(prepared_context),
-                INSTR_FLAG => instr_flag(prepared_context),
-                INSTR_JUMP => instr_jump(prepared_context),
-                INSTR_VAR => instr_var(prepared_context),
-                _ => Some(format!("Instruction not found \"{}\"", instruction))
+            if operation.0 == INSTR_FLAG {
+                if operation.1.starts_with(PRE_PROCESSOR_IGNORE) {
+                    continue;
+                }
+
+                let mut flag_label = String::new();
+                let chars = operation.1.chars();
+
+                for c in chars  {
+                    if !VARIABLE_NAME_CHARS.contains(&c) {
+                        return Some((format!("Flag contains invalid char '{c}'"), i))
+                    }
+                    flag_label.push(c);
+                }
+
+                if flag_label.is_empty() {
+                    return Some(("Flag label must not be empty".to_string(), i));
+                }
+
+                if flag_map.insert(flag_label.clone(), i).is_some() {
+                    return Some((format!("Flag label \"{flag_label}\" already exists"), i));
+                }
+
+                self.operations.remove(i);
+                self.operations.insert(i, INSTR_NOP.to_string());
+            }
+        }
+
+        for (i, s) in self.operations.clone().iter().enumerate() {
+            let Some(operation) = s.split_once(ARGUMENT_SEPARATOR) else {
+                continue;
+            };
+
+            if operation.0 == INSTR_JUMP {
+                if operation.1.is_empty() {
+                    return Some(("Flag label must not be empty".to_string(), i))
+                }
+
+                if operation.1.starts_with(PRE_PROCESSOR_IGNORE) {
+                    continue;
+                }
+
+                let result = flag_map.get(operation.1);
+                if result.is_none() {
+                    return Some((format!("No label with that name is declared \"{}\"", operation.1), i))
+                }
+
+                self.operations.remove(i);
+                self.operations.insert(i, format!("{INSTR_JUMP}{ARGUMENT_SEPARATOR}{}", result.unwrap()))
+            } else {
+                continue;
+            }
+        }
+
+        None
+    }
+
+    fn print_err(&self, is_pre_processor_err: bool, position: usize, err_details: String) {
+        if is_pre_processor_err {
+            println!("--- PRE-PROCESSOR ERROR ---");
+            println!("Error Details:");
+            println!(" CALL: \"{}\" at position {}", self.operations.get(position).unwrap(), position);
+            println!("   {}", err_details);
+        } else {
+            println!("--- ERROR ---");
+            println!("Error Details:");
+            println!(" CALL: \"{}\" at position {} with instruction counter at {}", self.operations.get(position).unwrap(), position, self.instruction_counter);
+            println!("   {}", err_details);
+        }
+    }
+
+    fn interpret_instruction(&mut self, instruction: &str, context_raw: &str) -> Option<String> {
+        match instruction {
+            INSTR_SHOUT => instr_shout(context_raw, self),
+            INSTR_IFDO => instr_ifdo(context_raw, self),
+            INSTR_FLAG => instr_flag(context_raw, self),
+            INSTR_JUMP => instr_jump(context_raw, self),
+
+            INSTR_NOP => None,
+            _ => {
+                let prepared_context = match prepare_context(context_raw, self) {
+                    Ok(v) => v,
+                    Err(e) => return Some(e)
+                };
+
+                return match instruction {
+                    INSTR_TERMINATE => instr_terminate(prepared_context, self),
+                    INSTR_VAR => instr_var(prepared_context, self),
+                    _ => Some(format!("Instruction not found \"{}\"", instruction))
+                }
             }
         }
     }
 }
 
-fn instr_terminate(context_raw: Vec<String>) -> Option<String> {
+fn main() {
+    let mut interpreter = Interpreter::new(PROGRAM);
+    interpreter.run();
+}
+
+fn instr_terminate(context_raw: Vec<String>, interpreter: &mut Interpreter) -> Option<String> {
     let argument: String = match context_raw.get(0) {
         Some(arg) => (*arg).to_string(),
         None => return Some("Termination code argument is missing".to_string()),
@@ -205,61 +293,70 @@ fn instr_terminate(context_raw: Vec<String>) -> Option<String> {
         return Some("Termination code 2 is reserved and cannot be used".to_string())
     }
 
-    unsafe {
-        INSTRUCTION_POINTER = -(exit_code as isize) - 1;
-    }
+    interpreter.instruction_pointer = -(exit_code as isize) - 1;
 
     None
 }
 
-fn instr_flag(context: Vec<String>) -> Option<String> {
+fn instr_flag(raw_context: &str, interpreter: &mut Interpreter) -> Option<String> {
+    if !raw_context.starts_with(PRE_PROCESSOR_IGNORE) {
+        return Some("Flag has a label that should have been picked up by the pre-processor, this is a bug".to_string())
+    }
+
+    let context = match prepare_context(&raw_context[1..], interpreter) {
+        Ok(v) => v,
+        Err(s) => return Some(s)
+    };
+
+    if context.len() > 1 {
+        return Some(create_wrong_args_count_error(1, context.len()))
+    }
+
     let argument = match context.get(0) {
         Some(arg) => arg,
         None => return Some("Flag label required".to_string()),
     };
 
-    if context.len() > 1 {
-        return Some(create_wrong_args_count_error(1, context.len()))
+    if interpreter.flag_map.insert(argument.clone(), interpreter.instruction_pointer.cast_unsigned()).is_some() {
+        return  Some(format!("A flag with label \"{}\" already exists", argument))
+    }
+    None
+}
+
+fn instr_jump(raw_context: &str, interpreter: &mut Interpreter) -> Option<String> {
+    if raw_context.starts_with(PRE_PROCESSOR_IGNORE) {
+        let context = match prepare_context(&raw_context[1..], interpreter) {
+            Ok(v) => v,
+            Err(s) => return Some(s)
+        };
+
+        let argument = match context.get(0) {
+            Some(arg) => arg,
+            None => return Some("Flag label required".to_string()),
+        };
+
+        return match interpreter.flag_map.get(&argument.to_owned()) {
+            Some(i) => {interpreter.instruction_pointer = *i as isize; return None}
+            None => Some(format!("No flag with label \"{}\" exists", argument))
+        }
     }
 
-    unsafe {
-        FLAG_MAP.with(|map| {
-            if map.borrow_mut().insert(argument.to_owned(), INSTRUCTION_POINTER.cast_unsigned()).is_some() {
-                return  Some(format!("A flag with label \"{}\" already exists", argument))
-            }
+    return match raw_context.parse::<isize>() {
+        Ok(i) => {
+            interpreter.instruction_pointer = i;
             None
-        })
+        },
+        Err(_) => Some("Jump contains flag label that should have been picked up by the pre-processor, this is a bug".to_string())
     }
 }
 
-fn instr_jump(context: Vec<String>) -> Option<String> {
-    let argument = match context.get(0) {
-        Some(arg) => arg,
-        None => return Some("Jump label required".to_string()),
-    };
-
-    if context.len() > 1 {
-        return Some(create_wrong_args_count_error(1, context.len()))
-    }
-
-    unsafe {
-        FLAG_MAP.with(|map| {
-            return match map.borrow_mut().get(&argument.to_owned()) {
-                Some(i) => {INSTRUCTION_POINTER = *i as isize; return None}
-                None => Some(format!("No flag with label \"{}\" exists", argument))
-            }
-        })
-    }
-}
-
-fn instr_shout(context_raw: &str) -> Option<String> {
-
+fn instr_shout(context_raw: &str, interpreter: &mut Interpreter) -> Option<String> {
     if context_raw.len() == 0 {
         return Some("Shout string or variable required".to_string())
     }
 
     let mut formatted = context_raw.to_string();
-    match prepare_argument(&mut formatted) {
+    match prepare_argument(&mut formatted, interpreter) {
         Some(s) => return Some(s),
         None => {
             print!("{}", formatted);
@@ -268,7 +365,7 @@ fn instr_shout(context_raw: &str) -> Option<String> {
     }
 }
 
-fn instr_var(context: Vec<String>) -> Option<String> {
+fn instr_var(context: Vec<String>, interpreter: &mut Interpreter) -> Option<String> {
     let arg_count = context.len();
     if arg_count != 3 {
         return Some(create_wrong_args_count_error(3, arg_count))
@@ -300,7 +397,7 @@ fn instr_var(context: Vec<String>) -> Option<String> {
         VarValue::Bool(_) => {
             match value.parse::<bool>() {
                 Ok(b) => {
-                    instr_var_sub_insert(var_name.as_str(), VarValue::Bool(b));
+                    interpreter.var_map.insert(var_name.clone(), VarValue::Bool(b));;
                     None
                 },
                 Err(_) => Some(format!("Value \"{value}\" is not of type {TYPE_BOOL}")),
@@ -309,7 +406,7 @@ fn instr_var(context: Vec<String>) -> Option<String> {
         VarValue::Int(_) => {
             match value.parse::<i32>() {
                 Ok(i) => {
-                    instr_var_sub_insert(var_name.as_str(), VarValue::Int(i));
+                    interpreter.var_map.insert(var_name.clone(), VarValue::Int(i));
                     None
                 },
                 Err(_) => Some(format!("Value \"{value}\" is not of type {TYPE_INT}")),
@@ -318,7 +415,7 @@ fn instr_var(context: Vec<String>) -> Option<String> {
         VarValue::Float(_) => {
             match value.parse::<f32>() {
                 Ok(f) => {
-                    instr_var_sub_insert(var_name.as_str(), VarValue::Float(f));
+                    interpreter.var_map.insert(var_name.clone(), VarValue::Float(f));
                     None
                 },
                 Err(_) => Some(format!("Value \"{value}\" is not of type {TYPE_FLOAT}")),
@@ -327,7 +424,7 @@ fn instr_var(context: Vec<String>) -> Option<String> {
         VarValue::Str(_) => {
             match value.parse::<String>() {
                 Ok(s) => {
-                    instr_var_sub_insert(var_name.as_str(), VarValue::Str(s));
+                    interpreter.var_map.insert(var_name.clone(), VarValue::Str(s));
                     None
                 },
                 Err(_) => Some(format!("Value \"{value}\" is not of type {TYPE_STR}")),
@@ -336,23 +433,16 @@ fn instr_var(context: Vec<String>) -> Option<String> {
     }
 }
 
-fn instr_var_sub_insert(name: &str, value: VarValue) {
-    VAR_MAP.with(|map| {
-        map.borrow_mut().insert(name.to_string(), value);
-    })
+
+fn resolve_variable(key: &str, interpreter: &mut Interpreter) -> Result<VarValue, String> {
+    match interpreter.var_map.get(key) {
+        Some(v) => Ok(v.clone()),
+        None => Err(format!("No variable named \"{key}\" exists"))
+    }
 }
 
-fn resolve_variable(key: &str) -> Result<VarValue, String> {
-    VAR_MAP.with(|map| {
-        match map.borrow().get(key) {
-            Some(v) => Ok(v.clone()),
-            None => Err(format!("No variable named \"{key}\" exists"))
-        }
-    })
-}
-
-fn resolve_variable_to_f32(key: &str) -> Result<f32, String> {
-    let v = resolve_variable(key)?;
+fn resolve_variable_to_f32(key: &str, interpreter: &mut Interpreter) -> Result<f32, String> {
+    let v = resolve_variable(key, interpreter)?;
     match v.to_string().parse::<f32>() {
         Ok(f) => Ok(f),
         Err(_) => Err(format!("Failed to parse variable \"{key}\" of type {} to a numeric value", v.type_to_string()))
@@ -367,7 +457,7 @@ fn create_wrong_args_count_error(expected: usize, given: usize) -> String {
     }
 }
 
-fn resolve_formula_to_float(formula: &str) -> Result<f32, String> {
+fn resolve_formula_to_float(formula: &str, interpreter: &mut Interpreter) -> Result<f32, String> {
     let mut is_reading_variable = false;
     let mut is_variable_end_reached = false;
     let mut current_variable = String::new();
@@ -454,7 +544,7 @@ fn resolve_formula_to_float(formula: &str) -> Result<f32, String> {
             is_unary_possible_next = false;
         } else if is_reading_variable {
             if is_variable_end_reached {
-                let var_value = resolve_variable_to_f32(current_variable.as_str())?;
+                let var_value = resolve_variable_to_f32(current_variable.as_str(), interpreter)?;
 
                 if is_unary_minus_set == true {
                     parsed_formula.push(FormulaElement::Number(-var_value))
@@ -503,7 +593,7 @@ fn resolve_formula_to_float(formula: &str) -> Result<f32, String> {
             }
         } ;
     } else if is_reading_variable {
-        let var_value = resolve_variable_to_f32(current_variable.as_str())?;
+        let var_value = resolve_variable_to_f32(current_variable.as_str(), interpreter)?;
 
         if is_unary_minus_set == true {
             parsed_formula.push(FormulaElement::Number(-var_value))
@@ -616,7 +706,7 @@ fn solve_formula_to_float(formula: &mut Vec<FormulaElement>, scan_for_subformula
     Ok(final_value)
 }
 
-fn prepare_context(context: &str) -> Result<Vec<String>, String> {
+fn prepare_context(context: &str, interpreter: &mut Interpreter) -> Result<Vec<String>, String> {
     let mut arguments= Vec::new();
     let mut is_string_literal_open = false;
     let mut current_arg = String::new();
@@ -659,7 +749,7 @@ fn prepare_context(context: &str) -> Result<Vec<String>, String> {
 
     let mut i = 0;
     while i < arguments.len()  {
-        match prepare_argument(&mut arguments[i]) {
+        match prepare_argument(&mut arguments[i], interpreter) {
             Some(s) => return Err(s),
             None => {}
         }
@@ -671,7 +761,7 @@ fn prepare_context(context: &str) -> Result<Vec<String>, String> {
 }
 
 // TODO: Consider String comparisons
-fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
+fn resolve_boolean_comparison(comparison: &str, interpreter: &mut Interpreter) -> Result<bool, String> {
     let mut lhs = String::new();
     let mut rhs = String::new();
 
@@ -764,22 +854,22 @@ fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
     };
 
     if is_lhs_var {
-        lhs = resolve_variable(lhs.as_str())?.to_string()
+        lhs = resolve_variable(lhs.as_str(), interpreter)?.to_string()
     } else if is_lhs_formula {
         if is_lhs_formula_rounded {
-            lhs = resolve_formula_to_float(lhs.as_str())?.round().to_string()
+            lhs = resolve_formula_to_float(lhs.as_str(), interpreter)?.round().to_string()
         } else {
-            lhs = resolve_formula_to_float(lhs.as_str())?.to_string()
+            lhs = resolve_formula_to_float(lhs.as_str(), interpreter)?.to_string()
         }
     }
 
     if is_rhs_var {
-        rhs = resolve_variable(rhs.as_str())?.to_string()
+        rhs = resolve_variable(rhs.as_str(), interpreter)?.to_string()
     } else if is_lhs_formula {
         if is_rhs_formula_rounded {
-            rhs = resolve_formula_to_float(rhs.as_str())?.round().to_string()
+            rhs = resolve_formula_to_float(rhs.as_str(), interpreter)?.round().to_string()
         } else {
-            rhs = resolve_formula_to_float(rhs.as_str())?.to_string()
+            rhs = resolve_formula_to_float(rhs.as_str(), interpreter)?.to_string()
         }
     }
 
@@ -818,7 +908,7 @@ fn resolve_boolean_comparison(comparison: &str) -> Result<bool, String> {
     Err(format!("The types of \"{lhs}\" and \"{rhs}\" do not match or are invalid"))
 }
 
-fn instr_ifdo(raw_context: &str) -> Option<String> {
+fn instr_ifdo(raw_context: &str, interpreter: &mut Interpreter) -> Option<String> {
     enum IfdoConditionType {
         Comparison,
         Variable,
@@ -879,13 +969,13 @@ fn instr_ifdo(raw_context: &str) -> Option<String> {
     let result;
     match condition_type {
         IfdoConditionType::Comparison => {
-            result = match resolve_boolean_comparison(condition_string.as_str()) {
+            result = match resolve_boolean_comparison(condition_string.as_str(), interpreter) {
                 Ok(b) => b,
                 Err(s) => return Some(s)
             };
         }
         IfdoConditionType::Variable => {
-            let pre_result = match resolve_variable(&condition_string) {
+            let pre_result = match resolve_variable(&condition_string, interpreter) {
                 Ok(v) => v,
                 Err(e) => return Some(e)
             };
@@ -909,13 +999,13 @@ fn instr_ifdo(raw_context: &str) -> Option<String> {
 
     if result {
         let instruction_split = instruction_string.split_once(" ").unwrap_or((&instruction_string, ""));
-        return interpret_instruction(instruction_split.0, instruction_split.1)
+        return interpreter.interpret_instruction(instruction_split.0, instruction_split.1)
     }
 
     None
 }
 
-fn prepare_argument(argument: &mut String) -> Option<String> {
+fn prepare_argument(argument: &mut String, interpreter: &mut Interpreter) -> Option<String> {
     assert!(!argument.is_empty());
 
     let mut chars = argument.chars();
@@ -926,25 +1016,25 @@ fn prepare_argument(argument: &mut String) -> Option<String> {
         *argument = chars.as_str().to_string();
         return None;
     } else if ch == IND_RESOLVE_VARIABLE {
-        let var_value = match resolve_variable(chars.as_str()) {
+        let var_value = match resolve_variable(chars.as_str(), interpreter) {
             Ok(v) => v,
             Err(e) => return Some(e)
         };
         *argument = var_value.to_string();
     } else if ch == IND_FORMULA_FLOAT {
-        let number_value = match resolve_formula_to_float(chars.as_str()) {
+        let number_value = match resolve_formula_to_float(chars.as_str(), interpreter) {
             Ok(v) => v,
             Err(e) => return Some(e)
         };
         *argument = number_value.to_string();
     } else if ch == IND_FORMULA_ROUNDED {
-        let number_value = match resolve_formula_to_float(chars.as_str()) {
+        let number_value = match resolve_formula_to_float(chars.as_str(), interpreter) {
             Ok(v) => v,
             Err(e) => return Some(e)
         };
         *argument = (number_value.round() as i32).to_string();
     } else if ch == IND_BOOL_COMPARISON {
-        let value = match resolve_boolean_comparison(chars.as_str()) {
+        let value = match resolve_boolean_comparison(chars.as_str(), interpreter) {
             Ok(v) => v,
             Err(e) => return Some(e)
         };
